@@ -4,7 +4,7 @@ TERMUX_PKG_LICENSE="GPL-3.0"
 TERMUX_PKG_MAINTAINER="fengchenkeji 399233159@qq.com"
 TERMUX_PKG_VERSION=1.0.0
 # 本地源码压缩包
-TERMUX_PKG_SRCURL=file://$HOME/Pbox_${TERMUX_PKG_VERSION}.tar.gz
+TERMUX_PKG_SRCURL=https://gitee.com/xianyugongzuoshi/Pbox.git
 # 务必执行 sha256sum ~/Pbox_1.0.0.tar.gz 替换这里64位哈希
 TERMUX_PKG_SHA256=填写你tar包真实的sha256值
 TERMUX_PKG_DEPENDS="fmt, libspdlog"
