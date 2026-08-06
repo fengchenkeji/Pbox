@@ -1,8 +1,11 @@
+//main.cpp
+
 #include <iostream>
 #include <string>
 #include <filesystem>
-#include "../include/initialization.h"
-#include "../include/call_so.h"
+#include "initialization.h"
+#include "call_so.h"
+#include "write_log.h"
 
 int main(int argc, char* argv[]) {
     bool debug = is_debug(argc, argv);
@@ -15,8 +18,13 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    std::string exe_dir_str = exe_path.parent_path().string();
+    // 日志输出到 bin/log
+    std::string log_dir = exe_dir_str + "/log";
+    init_error_file_log(log_dir);
+
     std::filesystem::path so_path = exe_path.parent_path() / "lib" / "libinitialization.so";
-    call_so(so_path.c_str(), "initialization", debug);
+    call_so(so_path.c_str(), "initialization", debug, exe_dir_str.c_str());
 
     return 0;
 }
