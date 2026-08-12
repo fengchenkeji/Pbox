@@ -1,41 +1,34 @@
 #include "initialization.h"
-#include "call_so.h"
-#include "image_db.h"
-#include <iostream>
-#include <ostream>
+#include <dlfcn.h>
 #include <string>
-#include <vector>
 
-static ImageDb g_db;
+using ProotMain = int (*)(int argc, char** argv);
 
-std::vector<std::string> get_information(){
-    std::vector<std::string> All_Os;
-    g_db.get_all_os(All_Os);
-    return All_Os;
-}
-
-extern "C" int initialization(const char* exe_dir, bool debug)
+extern "C" int run_proot(const char* exe_dir, const char* rootfs_path)
 {
-    auto logger = get_console_logger();
-
-    // 必须传入debug，只有debug=true才打印
-    DBG(logger, debug, "received exe_dir: [{}]", std::string(exe_dir));
-
-    std::string img_path = std::string(exe_dir) + "/res/images.txt";
-    DBG(logger, debug, "final file path: [{}]", img_path);
-
-    bool ok = g_db.load(img_path,debug);
-
-    if(!ok){
-        // 错误日志始终打印，不受debug控制
-        SPDLOG_LOGGER_ERROR(logger,"init image db failed");
+    std::string proot_so_path = std::string(exe_dir) + "/lib/libproot.so";
+    void* handle = dlopen(proot_so_path.c_str(), RTLD_NOW | RTLD_GLOBAL);
+    if (!handle)
+    {
         return -1;
     }
-    std::vector<std::string> Os_list = get_information();
-    for (const auto& os : Os_list)
-         {
-             std::cout << os << std::endl;
-         }
-    return 0;
 
+    auto proot_main = reinterpret_cast<ProotMain>(dlsym(handle, "main"));
+    if (!proot_main)
+    {
+        dlclose(handle);
+        return -2;
+    }
+
+    const char* argv[] = {
+        "proot",
+        "-0",
+        "-r", rootfs_path,
+        "-b", "/dev",
+        "/bin/sh"
+    };
+    int argc = sizeof(argv) / sizeof(char*);
+    int ret_code = proot_main(argc, const_cast<char**>(argv));
+    dlclose(handle);
+    return ret_code;
 }

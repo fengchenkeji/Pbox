@@ -1,12 +1,28 @@
 #pragma once
-#include <memory>
-#include <spdlog/spdlog.h>
+#include <string>
+#include <dlfcn.h>
+#include "write_log.h"
 
-bool is_debug(int argc, char* argv[]);
-std::shared_ptr<spdlog::logger> get_console_logger();
+// 加载动态库并获取导出函数指针
+// so_path: 动态库路径 | func_name: 函数名 | out_handle: 返回dlopen句柄
+// 返回函数指针，失败返回nullptr
+template<typename FuncPtr>
+FuncPtr load_dynamic_lib(const std::string& so_path, const std::string& func_name, void** out_handle)
+{
+    *out_handle = dlopen(so_path.c_str(), RTLD_LAZY);
+    if (!(*out_handle))
+    {
+        return nullptr;
+    }
+    void* func = dlsym(*out_handle, func_name.c_str());
+    return reinterpret_cast<FuncPtr>(func);
+}
 
-// 宏参数：logger、是否debug、日志内容
-#define DBG(logger, debug_flag, ...) \
-do{if((debug_flag) && (logger)) SPDLOG_LOGGER_INFO(logger,__VA_ARGS__);}while(0)
-
-void call_so(const char* so_path, const char* func_name, bool debug, const char* exe_dir);
+// 安全关闭动态库句柄
+inline void close_lib_handle(void* handle)
+{
+    if (handle != nullptr)
+    {
+        dlclose(handle);
+    }
+}

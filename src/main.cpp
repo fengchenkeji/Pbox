@@ -1,30 +1,30 @@
-//main.cpp
-
-#include <iostream>
-#include <string>
-#include <filesystem>
-#include "initialization.h"
-#include "call_so.h"
+#include "Cli_menu.h"
+#include "image_db.h"
 #include "write_log.h"
+#include <string>
 
-int main(int argc, char* argv[]) {
-    bool debug = is_debug(argc, argv);
+std::shared_ptr<spdlog::logger> get_console_logger();
 
-    std::filesystem::path exe_path;
-    try {
-        exe_path = std::filesystem::canonical(argv[0]);
-    } catch (const std::exception& e) {
-        std::cerr << "Get exe path failed: " << e.what() << std::endl;
-        return 1;
-    }
+int main(int argc, char* argv[])
+{
+    // 初始化日志
+    init_error_file_log("./logs");
+    auto logger = get_console_logger();
 
-    std::string exe_dir_str = exe_path.parent_path().string();
-    // 日志输出到 bin/log
-    std::string log_dir = exe_dir_str + "/log";
-    init_error_file_log(log_dir);
+    // 获取程序运行目录
+    std::string full_path = argv[0];
+    size_t slash = full_path.rfind('/');
+    std::string exe_dir;
+    if (slash != std::string::npos)
+        exe_dir = full_path.substr(0, slash);
+    else
+        exe_dir = ".";
 
-    std::filesystem::path so_path = exe_path.parent_path() / "lib" / "libinitialization.so";
-    call_so(so_path.c_str(), "initialization", debug, exe_dir_str.c_str());
+    // 解析命令行参数
+    CliParseResult cli_arg = parse_cli(argc, argv);
+    ImageDb db;
+    std::string img_file = exe_dir + "/res/images.txt";
+    db.load(img_file, cli_arg.debug);
 
-    return 0;
+    return execute_command(cli_arg, db, exe_dir);
 }
