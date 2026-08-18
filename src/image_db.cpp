@@ -1,130 +1,154 @@
 #include "image_db.h"
 #include "write_log.h"
 #include <fstream>
+#include <nlohmann/json.hpp>
 #include <sstream>
-#include <algorithm>
-#include <cctype>
-#include <spdlog/spdlog.h>
-#include <unordered_set>
+#include <vector>
+#include <string>
+#include <set>
 
-std::string ImageDb::to_lower(std::string s)
+using json = nlohmann::json;
+std::shared_ptr<spdlog::logger> get_console_logger();
+
+struct ImageItem {
+    std::string os;
+    std::string release;
+    std::string arch;
+    std::string variant;
+    std::string rootfs_path;
+};
+
+static std::vector<ImageItem> g_image_list;
+
+// 按分隔符分割字符串
+static std::vector<std::string> split_str(const std::string& s, char delim)
 {
-    for (char& c : s)
-    {
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    std::vector<std::string> res;
+    std::stringstream ss(s);
+    std::string item;
+    while (std::getline(ss, item, delim)) {
+        res.push_back(item);
     }
-    return s;
+    return res;
 }
 
-std::string ImageDb::trim(const std::string &s)
-{
-    auto start = s.begin();
-    while (start != s.end() && std::isspace(static_cast<unsigned char>(*start)))
-        start++;
-
-    auto end = s.end();
-    do
-    {
-        end--;
-    } while (std::distance(start, end) > 0 && std::isspace(static_cast<unsigned char>(*end)));
-
-    return std::string(start, end + 1);
-}
-
-bool ImageDb::load(const std::string& filepath, bool debug)
+bool ImageDb::load(const std::string& json_path, bool debug)
 {
     auto logger = get_console_logger();
-    m_images.clear();
-    std::ifstream file(filepath);
-    if (!file.is_open())
-    {
-        DBG(logger, debug, "打开镜像文件失败:{}", filepath);
+    std::ifstream fin(json_path);
+    if (!fin.is_open()) {
+        DBG(logger, debug, "无法打开镜像文件:{}", json_path);
         return false;
     }
-    std::string line;
-    while (std::getline(file, line))
-    {
-        if (line.empty()) continue;
-        std::stringstream ss(line);
-        ImageInfo info;
-        std::string os, rel, arch, var, path;
-        std::getline(ss, os, '|');
-        std::getline(ss, rel, '|');
-        std::getline(ss, arch, '|');
-        std::getline(ss, var, '|');
-        std::getline(ss, path);
 
-        info.os = trim(os);
-        info.release = trim(rel);
-        info.arch = trim(arch);
-        info.variant = trim(var);
-        info.path = trim(path);
-        m_images.push_back(info);
+    json root;
+    try {
+        fin >> root;
+    } catch (const std::exception& e) {
+        DBG(logger, debug, "JSON解析失败:{}", e.what());
+        return false;
     }
-    file.close();
-    DBG(logger, debug, "加载镜像记录总数:{}", m_images.size());
-    return !m_images.empty();
+
+    if (!root.contains("products") || !root["products"].is_object()) {
+        DBG(logger, debug, "JSON格式错误，缺少products根节点");
+        return false;
+    }
+
+    g_image_list.clear();
+    const auto& products = root["products"];
+    int valid_count = 0;
+
+    for (auto prod_it = products.begin(); prod_it != products.end(); ++prod_it) {
+        std::string product_key = prod_it.key();
+        const auto& product_val = prod_it.value();
+
+        auto parts = split_str(product_key, ':');
+        if (parts.size() != 4) {
+            continue;
+        }
+
+        std::string os = parts[0];
+        std::string release = parts[1];
+        std::string arch = parts[2];
+        std::string variant = parts[3];
+
+        if (!product_val.contains("versions") || !product_val["versions"].is_object()) {
+            continue;
+        }
+        const auto& versions = product_val["versions"];
+        if (versions.empty()) {
+            continue;
+        }
+
+        auto latest_ver_it = --versions.end();
+        const auto& latest_ver = latest_ver_it.value();
+
+        if (!latest_ver.contains("items") || !latest_ver["items"].is_object()) {
+            continue;
+        }
+        const auto& items = latest_ver["items"];
+
+        if (!items.contains("root.tar.xz")) {
+            continue;
+        }
+        const auto& root_item = items["root.tar.xz"];
+        if (!root_item.contains("path")) {
+            continue;
+        }
+
+        std::string path = root_item["path"].get<std::string>();
+        g_image_list.push_back({os, release, arch, variant, path});
+        valid_count++;
+    }
+
+    DBG(logger, debug, "镜像库加载完成，共{}条镜像记录", valid_count);
+    return valid_count > 0;
 }
 
+// 获取所有操作系统名称（去重，输出到参数）
 void ImageDb::get_all_os(std::vector<std::string>& out_os) const
 {
     out_os.clear();
-    std::unordered_set<std::string> os_set;
-    for (const auto& item : m_images)
-    {
+    std::set<std::string> os_set;
+    for (const auto& item : g_image_list) {
         os_set.insert(item.os);
     }
     out_os.assign(os_set.begin(), os_set.end());
 }
 
+// 根据操作系统获取所有版本（去重，返回vector）
 std::vector<std::string> ImageDb::get_releases(const std::string& os) const
 {
-    std::vector<std::string> res;
-    std::string target_os = to_lower(os);
-    std::unordered_set<std::string> ver_set;
-    for (const auto& item : m_images)
-    {
-        if (to_lower(item.os) == target_os)
-        {
-            ver_set.insert(item.release);
+    std::set<std::string> release_set;
+    for (const auto& item : g_image_list) {
+        if (item.os == os) {
+            release_set.insert(item.release);
         }
     }
-    res.assign(ver_set.begin(), ver_set.end());
-    return res;
+    return {release_set.begin(), release_set.end()};
 }
 
+// 根据系统+版本获取所有架构（去重，返回vector）
 std::vector<std::string> ImageDb::get_archs(const std::string& os, const std::string& release) const
 {
-    std::vector<std::string> res;
-    std::string t_os = to_lower(os);
-    std::string t_rel = to_lower(release);
-    std::unordered_set<std::string> arch_set;
-    for (const auto& item : m_images)
-    {
-        if (to_lower(item.os) == t_os && to_lower(item.release) == t_rel)
-        {
+    std::set<std::string> arch_set;
+    for (const auto& item : g_image_list) {
+        if (item.os == os && item.release == release) {
             arch_set.insert(item.arch);
         }
     }
-    res.assign(arch_set.begin(), arch_set.end());
-    return res;
+    return {arch_set.begin(), arch_set.end()};
 }
 
-std::string ImageDb::get_image_path(const std::string& os, const std::string& release, const std::string& arch, const std::string& variant) const
+// 根据系统、版本、架构、变体获取镜像完整路径
+std::string ImageDb::get_image_path(const std::string& os, const std::string& release,
+                                    const std::string& arch, const std::string& variant) const
 {
-    std::string t_os = to_lower(os);
-    std::string t_rel = to_lower(release);
-    std::string t_arch = to_lower(arch);
-    std::string t_var = to_lower(variant);
-    for (const auto& item : m_images)
-    {
-        if (to_lower(item.os) == t_os
-            && to_lower(item.release) == t_rel
-            && to_lower(item.arch) == t_arch
-            && to_lower(item.variant) == t_var)
-        {
-            return item.path;
+    for (const auto& item : g_image_list) {
+        if (item.os == os && item.release == release 
+            && item.arch == arch && item.variant == variant) {
+            return item.rootfs_path;
         }
     }
-    return "";
+    return {};
 }

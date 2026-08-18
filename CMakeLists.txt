@@ -26,13 +26,24 @@ add_executable(main
     src/image_db.cpp
     src/write_log.cpp
     src/call_so.cpp
+    src/download_rootfs.cpp
 )
+
 find_package(spdlog REQUIRED)
-target_link_libraries(main PRIVATE dl spdlog::spdlog)
+find_package(CURL REQUIRED)
+# 删掉 find_package(nlohmann_json REQUIRED)
+
+# 链接库 彻底移除 nlohmann_json::nlohmann
+target_link_libraries(main PRIVATE
+    dl
+    spdlog::spdlog
+    CURL::libcurl
+    archive
+)
 
 # 编译后自动复制资源文件夹
 add_custom_command(TARGET main POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-    ${PROJECT_SOURCE_DIR}/res $<TARGET_FILE_DIR:main>/res
+    ${PROJECT_SOURCE_DIR}/res $<TARGET_FILE_DIR:main>
     COMMENT "Sync res folder to build dir"
 )

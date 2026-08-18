@@ -20,11 +20,14 @@ extern "C" int run_proot(const char* exe_dir, const char* rootfs_path)
         return -2;
     }
 
+    // rootfs_path 就是lxc解压后的根目录，直接传给 -r
     const char* argv[] = {
         "proot",
         "-0",
         "-r", rootfs_path,
         "-b", "/dev",
+        "-b", "/proc",
+        "-b", "/sys",
         "/bin/sh"
     };
     int argc = sizeof(argv) / sizeof(char*);

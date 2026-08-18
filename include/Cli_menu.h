@@ -1,11 +1,13 @@
 #pragma once
 #include <vector>
 #include <string>
+
 class ImageDb;
 
 enum class SubCmdType
 {
     None,
+    Help,
     List,
     Install,
     Login
@@ -14,10 +16,9 @@ enum class SubCmdType
 struct CliParseResult
 {
     SubCmdType cmd = SubCmdType::None;
+    bool debug = false;
     std::string list_arg;
     std::string install_arg;
-    std::string login_arg;
-    bool debug = false;
 };
 
 CliParseResult parse_cli(int argc, char* argv[]);
