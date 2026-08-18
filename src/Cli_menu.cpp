@@ -18,11 +18,11 @@ void print_help()
 {
     std::cout << "Pbox Proot 容器工具（LXC镜像版）\n";
     std::cout << "用法:\n";
-    std::cout << "  pbox --run_type=debug install ubuntu:22.04\n";
-    std::cout << "  pbox list                列出所有系统\n";
-    std::cout << "  pbox list ubuntu         列出ubuntu所有版本\n";
-    std::cout << "  pbox login ubuntu:22.04  进入已安装容器\n";
-    std::cout << "  pbox -h / --help        显示本帮助\n";
+    std::cout << "  pbox --run_type=debug install ubuntu:22.04   下载并安装容器\n";
+    std::cout << "  pbox list                                    列出所有系统\n";
+    std::cout << "  pbox list ubuntu                             列出ubuntu所有版本\n";
+    std::cout << "  pbox login ubuntu:22.04                      进入已安装容器\n";
+    std::cout << "  pbox -h / --help                             显示本帮助\n";
 }
 
 CliParseResult parse_cli(int argc, char* argv[])
@@ -83,10 +83,13 @@ static std::string get_native_arch()
         return "";
     std::string machine = u.machine;
 
+    // 32位 ARM（Termux 32位用户空间常见）
     if (machine == "armv8l" || machine == "armv7l" || machine == "armhf")
         return "armhf";
+    // 64位 ARM
     if (machine == "aarch64" || machine == "arm64")
         return "arm64";
+    // x86 64位
     if (machine == "x86_64" || machine == "amd64")
         return "amd64";
     if (machine == "riscv64")
@@ -106,14 +109,72 @@ static std::string match_native_arch(const std::vector<std::string>& arch_list)
     return "";
 }
 
+// 容器安装状态
+struct ContainerStatus
+{
+    bool installed = false;   // 标记文件有效且rootfs目录存在
+    bool mark_exists = false; // 标记文件存在
+    bool rootfs_exists = false; // rootfs目录存在
+    std::string script_file;
+    std::string rootfs_dir;
+    std::string tag;
+    std::string os_name;
+    std::string release_name;
+};
+
+// 解析 install/login 参数并检查容器安装状态
+static bool parse_and_check_container(const std::string& install_param,
+                                       const std::string& exe_dir,
+                                       ContainerStatus& status,
+                                       bool debug)
+{
+    auto logger = get_console_logger();
+    size_t colon_pos = install_param.find(':');
+    if (colon_pos == std::string::npos)
+    {
+        std::cerr << "[错误] 参数格式错误，正确格式：install/login 系统名称:版本\n";
+        return false;
+    }
+    status.os_name = install_param.substr(0, colon_pos);
+    status.release_name = install_param.substr(colon_pos + 1);
+    status.tag = status.os_name + "_" + status.release_name;
+    status.script_file = exe_dir + "/proot/start_script/" + status.tag;
+    status.rootfs_dir = exe_dir + "/proot/container/" + status.tag;
+
+    try
+    {
+        if (fs::exists(status.script_file) && fs::is_regular_file(status.script_file))
+        {
+            uint64_t file_size = fs::file_size(status.script_file);
+            if (file_size > 0)
+                status.mark_exists = true;
+        }
+        if (fs::exists(status.rootfs_dir) && fs::is_directory(status.rootfs_dir))
+            status.rootfs_exists = true;
+    }
+    catch (const std::exception& e)
+    {
+        std::cerr << "[错误] 检查安装状态异常\n";
+        DBG(logger, debug, "检查安装状态异常: {}", e.what());
+        return false;
+    }
+
+    status.installed = status.mark_exists && status.rootfs_exists;
+    return true;
+}
+
 int execute_command(const CliParseResult& res, ImageDb& db, const std::string& exe_dir)
 {
     auto logger = get_console_logger();
+
+    // ===== Help 命令 =====
     if (res.cmd == SubCmdType::Help)
     {
         print_help();
         return 0;
     }
+
+    // ===== List 命令 =====
     if (res.cmd == SubCmdType::List)
     {
         const std::string& target_os = res.list_arg;
@@ -142,51 +203,42 @@ int execute_command(const CliParseResult& res, ImageDb& db, const std::string& e
         }
         return 0;
     }
-    std::string install_param = res.install_arg;
-    size_t colon_pos = install_param.find(':');
-    if (colon_pos == std::string::npos)
-    {
-        std::cerr << "[错误] 参数格式错误，正确格式：install/login 系统名称:版本\n";
+
+    // ===== Install / Login 公共：解析参数并检查容器状态 =====
+    ContainerStatus status;
+    if (!parse_and_check_container(res.install_arg, exe_dir, status, res.debug))
         return 1;
-    }
-    std::string os_name = install_param.substr(0, colon_pos);
-    std::string release_name = install_param.substr(colon_pos + 1);
-    std::string tag = os_name + "_" + release_name;
-    std::string script_file = exe_dir + "/proot/start_script/" + tag;
-    std::string rootfs_dir = exe_dir + "/proot/container/" + tag;
-    bool script_valid = false;
-    bool rootfs_exists = false;
-    try
-    {
-        if (fs::exists(script_file) && fs::is_regular_file(script_file))
-        {
-            uint64_t file_size = fs::file_size(script_file);
-            if (file_size > 0)
-                script_valid = true;
-        }
-        if (fs::exists(rootfs_dir) && fs::is_directory(rootfs_dir))
-            rootfs_exists = true;
-    }
-    catch (const std::exception& e)
-    {
-        std::cerr << "[错误] 检查安装状态异常，安装失败\n";
-        DBG(logger, res.debug, "检查安装状态异常: {}", e.what());
-        return -1;
-    }
-    if (script_valid && rootfs_exists)
-    {
-        std::cout << tag << " 已安装，可使用 pbox login " << os_name << ":" << release_name << " 启动\n";
-        return 0;
-    }
+
+    // ===== Login 命令：必须已安装，直接启动 =====
     if (res.cmd == SubCmdType::Login)
     {
-        std::cerr << "[错误] " << tag << " 未安装，请先执行 install\n";
-        return 1;
+        if (!status.installed)
+        {
+            std::cerr << "[错误] " << status.tag << " 未安装，请先执行: pbox install "
+                      << status.os_name << ":" << status.release_name << "\n";
+            return 1;
+        }
+        std::cout << "[信息] 正在启动容器 " << status.tag << " ...\n";
+        return start_proot(status.rootfs_dir, exe_dir, res.debug);
     }
-    std::vector<std::string> arch_list = db.get_archs(os_name, release_name);
+
+    // ===== Install 命令 =====
+    // 已安装：提示并直接启动
+    if (status.installed)
+    {
+        std::cout << "[信息] " << status.tag << " 已安装，直接启动容器\n";
+        return start_proot(status.rootfs_dir, exe_dir, res.debug);
+    }
+
+    // 未安装：下载并安装
+    DBG(logger, res.debug, "开始安装容器: {}", status.tag);
+
+    // 匹配本机架构
+    std::vector<std::string> arch_list = db.get_archs(status.os_name, status.release_name);
     if (arch_list.empty())
     {
-        std::cerr << "[错误] " << os_name << " " << release_name << " 未匹配到架构，安装失败\n";
+        std::cerr << "[错误] " << status.os_name << " " << status.release_name
+                  << " 未匹配到架构，安装失败\n";
         return 1;
     }
     std::string arch = match_native_arch(arch_list);
@@ -199,16 +251,21 @@ int execute_command(const CliParseResult& res, ImageDb& db, const std::string& e
         return 1;
     }
     DBG(logger, res.debug, "自动匹配本机架构: {}", arch);
-    std::string relative_path = db.get_image_path(os_name, release_name, arch, "default");
+
+    // 获取镜像下载路径
+    std::string relative_path = db.get_image_path(status.os_name, status.release_name, arch, "default");
     if (relative_path.empty())
     {
-        std::cerr << "[错误] 未找到镜像 " << os_name << ":" << release_name << "，安装失败\n";
+        std::cerr << "[错误] 未找到镜像 " << status.os_name << ":" << status.release_name
+                  << "，安装失败\n";
         return 1;
     }
+
+    // 创建目录
     try
     {
-        fs::create_directories(fs::path(script_file).parent_path());
-        fs::create_directories(rootfs_dir);
+        fs::create_directories(fs::path(status.script_file).parent_path());
+        fs::create_directories(status.rootfs_dir);
     }
     catch (const std::exception& e)
     {
@@ -216,21 +273,28 @@ int execute_command(const CliParseResult& res, ImageDb& db, const std::string& e
         DBG(logger, res.debug, "创建目录异常: {}", e.what());
         return -1;
     }
-    std::string tar_path = exe_dir + "/" + tag + "_rootfs.tar.xz";
+
+    // 下载 rootfs
+    std::string tar_path = exe_dir + "/" + status.tag + "_rootfs.tar.xz";
     if (!download_rootfs(relative_path, tar_path, res.debug))
     {
         std::cerr << "[错误] rootfs下载失败，安装终止\n";
         return -1;
     }
-    if (!extract_rootfs(tar_path, rootfs_dir, arch, res.debug))
+
+    // 解压 rootfs
+    if (!extract_rootfs(tar_path, status.rootfs_dir, arch, res.debug))
     {
         std::cerr << "[错误] rootfs解压失败，安装终止\n";
         return -1;
     }
+
+    // 写入安装标记文件
     try
     {
-        std::ofstream mark(script_file);
-        mark << "installed " << os_name << ":" << release_name << "\n";
+        std::ofstream mark(status.script_file);
+        mark << "installed " << status.os_name << ":" << status.release_name << "\n";
+        mark << "arch=" << arch << "\n";
         mark.close();
     }
     catch (const std::exception& e)
@@ -239,9 +303,18 @@ int execute_command(const CliParseResult& res, ImageDb& db, const std::string& e
         DBG(logger, res.debug, "写入标记文件异常: {}", e.what());
         return -1;
     }
-    DBG(logger, res.debug, "{} 安装完成，启动容器", tag);
-    std::cout << "[成功] " << tag << " 安装完成\n";
-    return start_proot(rootfs_dir, exe_dir, res.debug);
+
+    // 安装完成，清理压缩包
+    try
+    {
+        if (fs::exists(tar_path))
+            fs::remove(tar_path);
+    }
+    catch (...) {}
+
+    DBG(logger, res.debug, "{} 安装完成，启动容器", status.tag);
+    std::cout << "[成功] " << status.tag << " 安装完成\n";
+    return start_proot(status.rootfs_dir, exe_dir, res.debug);
 }
 
 int start_proot(const std::string& rootfs_path, const std::string& exe_dir, bool debug)
@@ -249,8 +322,10 @@ int start_proot(const std::string& rootfs_path, const std::string& exe_dir, bool
     auto logger = get_console_logger();
     std::string init_so = exe_dir + "/lib/libinitialization.so";
     void* handle = nullptr;
+
     using RunProotFunc = int (*)(const char*, const char*);
     auto run_proot = load_dynamic_lib<RunProotFunc>(init_so, "run_proot", &handle);
+
     if (!handle)
     {
         std::cerr << "[错误] 加载libinitialization.so失败，启动容器失败\n";
@@ -264,6 +339,7 @@ int start_proot(const std::string& rootfs_path, const std::string& exe_dir, bool
         close_lib_handle(handle);
         return -2;
     }
+
     int ret = run_proot(exe_dir.c_str(), rootfs_path.c_str());
     if (ret == -1)
     {
@@ -275,6 +351,7 @@ int start_proot(const std::string& rootfs_path, const std::string& exe_dir, bool
         std::cerr << "[错误] 未找到proot main符号，容器启动失败\n";
         DBG(logger, debug, "libinitialization内部错误：未找到proot main符号");
     }
+
     close_lib_handle(handle);
     return ret;
 }

@@ -1,4 +1,22 @@
+# 构建目录
+build/
 .cache/
 compile_commands.json
+
+# 编译产物
+lib/libinitialization.so
+
+# 日志
+logs/
+*.log
+
+# 容器运行时数据
+proot/container/
+proot/start_script/
+
+# 下载的压缩包
+*.tar.xz
+*.tar.gz
+
+# 临时脚本
 git_commit.sh
-build/

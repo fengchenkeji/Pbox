@@ -15,8 +15,6 @@ class ImageDb
 {
 private:
     std::vector<ImageInfo> m_images;
-    static std::string to_lower(std::string s);
-    static std::string trim(const std::string &s);
 public:
     // 接口完全不变，仅内部改为解析JSON
     bool load(const std::string& filepath, bool debug);
