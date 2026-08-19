@@ -24,26 +24,28 @@ find_package(CURL REQUIRED)
 # libarchive: 多数系统（含 Termux）无 CMake config，直接链接库名
 find_library(LIBARCHIVE_LIBRARY NAMES archive libarchive REQUIRED)
 
-# nlohmann_json 是 header-only，Termux 中通过系统包含路径可用
-# 如遇找不到头文件，安装: pkg install nlohmann-json
+# nlohmann_json 是 header‑only，Termux 中通过系统包含路径可用
+# 如遇找不到头文件，安装: pkg install nlohmann‑json
 
 # ===== 动态库：libinitialization.so（proot 加载器）=====
 add_library(initialization SHARED
     src/initialization.cpp
+    src/container_config.cpp
 )
+# initialization 只需要 dl + spdlog，不需要 curl/libarchive
 target_link_libraries(initialization PRIVATE dl spdlog::spdlog)
+set_target_properties(initialization PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
+)
 
-# ===== 主程序可执行文件 =====
+# 主程序
 add_executable(main
     src/main.cpp
     src/Cli_menu.cpp
-    src/image_db.cpp
-    src/write_log.cpp
-    src/call_so.cpp
     src/download_rootfs.cpp
-    src/container_config.cpp
+    src/image_db.cpp
 )
-
+# 合并链接，去掉重复的 target_link_libraries
 target_link_libraries(main PRIVATE
     dl
     spdlog::spdlog
