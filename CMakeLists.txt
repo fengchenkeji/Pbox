@@ -21,8 +21,7 @@ include_directories(${PROJECT_SOURCE_DIR}/include)
 # 查找依赖库
 find_package(spdlog REQUIRED)
 find_package(CURL REQUIRED)
-# libarchive: 多数系统（含 Termux）无 CMake config，直接链接库名
-find_library(LIBARCHIVE_LIBRARY NAMES archive libarchive REQUIRED)
+
 
 # nlohmann_json 是 header-only，Termux 中通过系统包含路径可用
 # 如遇找不到头文件，安装: pkg install nlohmann-json
@@ -47,7 +46,6 @@ target_link_libraries(main PRIVATE
     dl
     spdlog::spdlog
     CURL::libcurl
-    ${LIBARCHIVE_LIBRARY}
 )
 
 # ===== 编译后自动复制资源和预编译库到构建目录 =====
