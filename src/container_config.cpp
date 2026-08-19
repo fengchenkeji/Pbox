@@ -1,5 +1,4 @@
 #include "container_config.h"
-#include "write_log.h"
 
 #include <fstream>
 #include <sstream>
@@ -7,9 +6,8 @@
 #include <cstdlib>
 
 namespace fs = std::filesystem;
-std::shared_ptr<spdlog::logger> get_console_logger();
 
-// 去除字符串首尾空白
+// 去除首尾空白
 static std::string trim(const std::string& s)
 {
     size_t start = s.find_first_not_of(" \t\r\n");
@@ -18,167 +16,119 @@ static std::string trim(const std::string& s)
     return s.substr(start, end - start + 1);
 }
 
-// 确保容器内路径以 / 开头
-static std::string normalize_container_path(const std::string& p)
+// 解析单行配置
+static void parse_line(const std::string& raw_line, ContainerConfig& cfg, LoggerPtr logger, bool debug)
 {
-    if (p.empty()) return "/";
-    if (p[0] == '/') return p;
-    return "/" + p;
-}
-
-bool parse_config_line(const std::string& raw_line, ContainerConfig& out, bool debug)
-{
-    auto logger = get_console_logger();
     std::string line = trim(raw_line);
+    if (line.empty() || line[0] == '#') return;
+    // 跳过安装标记行
+    if (line.substr(0, 9) == "installed" || line.substr(0, 5) == "arch=") return;
 
-    // 空行或注释
-    if (line.empty() || line[0] == '#')
-        return true;
+    size_t sep = line.find("+=");
+    if (sep == std::string::npos) return;
 
-    // 查找 " += " 分隔符
-    size_t sep_pos = line.find("+=");
-    if (sep_pos == std::string::npos)
-    {
-        DBG(logger, debug, "配置行格式错误(缺少+=): {}", line);
-        return false;
-    }
+    std::string left = trim(line.substr(0, sep));
+    std::string right = trim(line.substr(sep + 2));
+    if (left.empty() || right.empty()) return;
 
-    std::string left = trim(line.substr(0, sep_pos));
-    std::string right_part = trim(line.substr(sep_pos + 2));
+    // right 末尾是 flag (-b / -p)
+    size_t last_sp = right.find_last_of(" \t");
+    if (last_sp == std::string::npos) return;
 
-    if (left.empty() || right_part.empty())
-    {
-        DBG(logger, debug, "配置行左右侧为空: {}", line);
-        return false;
-    }
-
-    // right_part 末尾是 flag (-b / -p)，前面是 source
-    size_t last_space = right_part.find_last_of(" \t");
-    if (last_space == std::string::npos)
-    {
-        DBG(logger, debug, "配置行缺少flag(-b/-p): {}", line);
-        return false;
-    }
-
-    std::string source = trim(right_part.substr(0, last_space));
-    std::string flag = trim(right_part.substr(last_space + 1));
+    std::string source = trim(right.substr(0, last_sp));
+    std::string flag = trim(right.substr(last_sp + 1));
 
     if (flag == "-b")
     {
-        // 绑定挂载：left=容器挂载点, source=宿主机路径
-        BindRule rule;
-        rule.host_path = source;
-        rule.container_path = normalize_container_path(left);
-        out.binds.push_back(rule);
-        DBG(logger, debug, "解析绑定挂载: {} -> {}", rule.host_path, rule.container_path);
-        return true;
+        // 绑定挂载: left=容器挂载点(如mnt), source=宿主路径
+        std::string container_path = (left[0] == '/') ? left : "/" + left;
+        std::string mount_str = source + ":" + container_path;
+        cfg.mounts.push_back(mount_str);
+        DBG(logger, debug, "解析绑定挂载: {}", mount_str);
     }
     else if (flag == "-p")
     {
-        // 端口转发：left=容器端口, source=宿主机端口
-        PortRule rule;
-        rule.container_port = std::atoi(left.c_str());
-        rule.host_port = std::atoi(source.c_str());
-        if (rule.container_port <= 0 || rule.host_port <= 0)
+        // 端口转发: left=容器端口, source=宿主端口
+        PortForward pf;
+        pf.containerPort = std::atoi(left.c_str());
+        pf.hostPort = std::atoi(source.c_str());
+        if (pf.containerPort > 0 && pf.hostPort > 0)
         {
-            DBG(logger, debug, "端口号无效: {}", line);
-            return false;
+            cfg.portForwards.push_back(pf);
+            DBG(logger, debug, "解析端口转发: 宿主{} -> 容器{}", pf.hostPort, pf.containerPort);
         }
-        out.ports.push_back(rule);
-        DBG(logger, debug, "解析端口转发: 宿主{} -> 容器{}", rule.host_port, rule.container_port);
-        return true;
     }
-
-    DBG(logger, debug, "未知flag: {}", flag);
-    return false;
 }
 
 // 从单个文件加载配置
-static bool load_config_file(const std::string& filepath, ContainerConfig& out, bool debug)
+static bool load_file(const std::string& path, ContainerConfig& cfg, LoggerPtr logger, bool debug)
 {
-    auto logger = get_console_logger();
-    if (!fs::exists(filepath) || !fs::is_regular_file(filepath))
-    {
-        return false;
-    }
+    if (!fs::exists(path) || !fs::is_regular_file(path)) return false;
 
-    std::ifstream f(filepath);
-    if (!f.is_open())
-    {
-        DBG(logger, debug, "无法打开配置文件: {}", filepath);
-        return false;
-    }
+    std::ifstream f(path);
+    if (!f.is_open()) return false;
 
     std::string line;
     bool has_valid = false;
     while (std::getline(f, line))
     {
-        // 跳过安装标记行（installed xxx / arch=xxx）
-        std::string trimmed = trim(line);
-        if (trimmed.empty() || trimmed[0] == '#' ||
-            trimmed.substr(0, 9) == "installed" ||
-            trimmed.substr(0, 5) == "arch=")
-        {
-            continue;
-        }
-        if (parse_config_line(line, out, debug))
-        {
+        size_t before = cfg.mounts.size() + cfg.portForwards.size();
+        parse_line(line, cfg, logger, debug);
+        if (cfg.mounts.size() + cfg.portForwards.size() > before)
             has_valid = true;
-        }
     }
     f.close();
 
     if (has_valid)
-    {
-        out.valid = true;
-        DBG(logger, debug, "从配置文件加载成功: {} (绑定{}条, 端口{}条)",
-            filepath, out.binds.size(), out.ports.size());
-    }
+        DBG(logger, debug, "从配置文件加载: {} (绑定{}条, 端口{}条)",
+            path, cfg.mounts.size(), cfg.portForwards.size());
     return has_valid;
 }
 
-bool load_container_config(const std::string& start_script_file,
+bool load_container_config(const std::string& exe_dir,
                            const std::string& rootfs_dir,
-                           const std::string& tag,
-                           ContainerConfig& out,
+                           ContainerConfig& cfg,
+                           LoggerPtr logger,
                            bool debug)
 {
-    auto logger = get_console_logger();
+    // 从 rootfs_dir 反推 tag
+    fs::path rp(rootfs_dir);
+    std::string tag = rp.filename().string();
 
-    // 先读 rootfs 内 config 目录（容器级默认配置）
-    std::string rootfs_config = fs::path(rootfs_dir) / "config" / tag;
-    bool rootfs_loaded = load_config_file(rootfs_config, out, debug);
+    // 1. rootfs 内 config
+    std::string rootfs_cfg = rootfs_dir + "/config/" + tag;
+    bool ok1 = load_file(rootfs_cfg, cfg, logger, debug);
 
-    // 再读 start_script 文件（用户级配置，可覆盖/追加）
-    bool script_loaded = load_config_file(start_script_file, out, debug);
+    // 2. start_script 文件
+    std::string script_cfg = exe_dir + "/proot/start_script/" + tag;
+    bool ok2 = load_file(script_cfg, cfg, logger, debug);
 
-    if (rootfs_loaded || script_loaded)
-    {
-        out.valid = true;
-    }
-
-    DBG(logger, debug, "容器配置加载完成: rootfs_config={}, start_script={}, 绑定={}, 端口={}",
-        rootfs_loaded, script_loaded, out.binds.size(), out.ports.size());
-
-    return out.valid;
+    DBG(logger, debug, "容器配置加载完成: rootfs={}, start_script={}, 绑定={}, 端口={}",
+        ok1, ok2, cfg.mounts.size(), cfg.portForwards.size());
+    return true; // 无配置也返回成功，使用默认系统挂载
 }
 
-bool generate_default_config(const std::string& start_script_file, bool debug)
+bool generate_default_config(const std::string& config_path,
+                             const std::string& os_name,
+                             const std::string& release,
+                             const std::string& arch,
+                             LoggerPtr logger,
+                             bool debug)
 {
-    auto logger = get_console_logger();
     try
     {
-        fs::path p(start_script_file);
+        fs::path p(config_path);
         fs::create_directories(p.parent_path());
 
-        std::ofstream f(start_script_file, std::ios::app);
+        std::ofstream f(config_path);
         if (!f.is_open())
         {
-            DBG(logger, debug, "无法写入默认配置: {}", start_script_file);
+            DBG(logger, debug, "无法写入配置文件: {}", config_path);
             return false;
         }
 
-        // 写入默认配置注释和示例
+        f << "installed " << os_name << ":" << release << "\n";
+        f << "arch=" << arch << "\n";
         f << "\n";
         f << "# ===== Pbox 容器配置 =====\n";
         f << "# 格式: <容器侧> += <宿主侧> <类型>\n";
@@ -190,9 +140,12 @@ bool generate_default_config(const std::string& start_script_file, bool debug)
         f << "\n";
         f << "# 默认挂载手机内部存储到容器 /mnt\n";
         f << "mnt += /storage/emulated/0/ -b\n";
+        f << "\n";
+        f << "# 端口转发示例（取消注释生效，需安装 socat）:\n";
+        f << "# 22 += 8022 -p\n";
         f.close();
 
-        DBG(logger, debug, "默认配置已生成: {}", start_script_file);
+        DBG(logger, debug, "默认配置已生成: {}", config_path);
         return true;
     }
     catch (const std::exception& e)

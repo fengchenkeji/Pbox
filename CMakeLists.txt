@@ -11,41 +11,35 @@ endif()
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O2 -Wall")
 
-# 输出目录配置
+# 输出目录
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 
-# 全局头文件目录
+# 头文件目录
 include_directories(${PROJECT_SOURCE_DIR}/include)
 
-# 查找依赖库
+# 依赖库
 find_package(spdlog REQUIRED)
 find_package(CURL REQUIRED)
-# libarchive: 多数系统（含 Termux）无 CMake config，直接链接库名
 find_library(LIBARCHIVE_LIBRARY NAMES archive libarchive REQUIRED)
 
-# nlohmann_json 是 header‑only，Termux 中通过系统包含路径可用
-# 如遇找不到头文件，安装: pkg install nlohmann‑json
-
-# ===== 动态库：libinitialization.so（proot 加载器）=====
+# ===== 动态库：libinitialization.so =====
+# 包含 container_config.cpp，因为 initialization.cpp 调用 load_container_config
 add_library(initialization SHARED
     src/initialization.cpp
     src/container_config.cpp
 )
-# initialization 只需要 dl + spdlog，不需要 curl/libarchive
 target_link_libraries(initialization PRIVATE dl spdlog::spdlog)
-set_target_properties(initialization PROPERTIES
-    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
-)
 
-# 主程序
+# ===== 主程序 =====
 add_executable(main
     src/main.cpp
     src/Cli_menu.cpp
-    src/download_rootfs.cpp
     src/image_db.cpp
+    src/write_log.cpp
+    src/call_so.cpp
+    src/download_rootfs.cpp
 )
-# 合并链接，去掉重复的 target_link_libraries
 target_link_libraries(main PRIVATE
     dl
     spdlog::spdlog
@@ -53,14 +47,13 @@ target_link_libraries(main PRIVATE
     ${LIBARCHIVE_LIBRARY}
 )
 
-# ===== 编译后自动复制资源和预编译库到构建目录 =====
+# ===== 编译后复制资源 =====
 add_custom_command(TARGET main POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
     ${PROJECT_SOURCE_DIR}/res $<TARGET_FILE_DIR:main>/res
     COMMENT "Sync res folder to build dir"
 )
 
-# 复制预编译的 libproot.so 到构建输出的 lib 目录
 add_custom_command(TARGET main POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
     ${PROJECT_SOURCE_DIR}/lib/libproot.so $<TARGET_FILE_DIR:main>/lib/libproot.so
