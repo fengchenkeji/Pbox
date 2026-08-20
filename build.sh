@@ -5,7 +5,7 @@ TERMUX_PKG_MAINTAINER="fengchenkeji <399233159@qq.com>"
 TERMUX_PKG_VERSION=0.0.1
 TERMUX_PKG_SRCURL=https://gitee.com/xianyugongzuoshi/Pbox/archive/refs/tags/v${TERMUX_PKG_VERSION}.tar.gz
 TERMUX_PKG_SHA256=SKIP
-TERMUX_PKG_DEPENDS="libspdlog, libcurl,"
+TERMUX_PKG_DEPENDS="libspdlog, libcurl"
 TERMUX_PKG_BUILD_IN_SRC=true
 
 termux_step_make() {
