@@ -11,8 +11,18 @@ endif()
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O2 -Wall")
 
-# 输出目录
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+# 优先使用ANDROID_ABI；否则使用传入的PBOX_ABI
+if(ANDROID_ABI)
+    set(PBOX_ABI "${ANDROID_ABI}")
+elseif(NOT PBOX_ABI)
+    message(WARNING "PBOX_ABI not set, default to armeabi‑v7a, pass -DPBOX_ABI=arm64‑v8a for 64bit")
+    set(PBOX_ABI "armeabi‑v7a")
+endif()
+
+message(STATUS "PBOX target ABI: ${PBOX_ABI}")
+
+# 输出目录：库输出到 build/lib/${PBOX_ABI}
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib/${PBOX_ABI})
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 
 # 头文件目录
@@ -21,10 +31,8 @@ include_directories(${PROJECT_SOURCE_DIR}/include)
 # 依赖库
 find_package(spdlog REQUIRED)
 find_package(CURL REQUIRED)
-find_library(LIBARCHIVE_LIBRARY NAMES archive libarchive REQUIRED)
 
 # ===== 动态库：libinitialization.so =====
-# 包含 container_config.cpp，因为 initialization.cpp 调用 load_container_config
 add_library(initialization SHARED
     src/initialization.cpp
     src/container_config.cpp
@@ -39,12 +47,12 @@ add_executable(main
     src/write_log.cpp
     src/call_so.cpp
     src/download_rootfs.cpp
+    src/container_config.cpp
 )
 target_link_libraries(main PRIVATE
     dl
     spdlog::spdlog
     CURL::libcurl
-    ${LIBARCHIVE_LIBRARY}
 )
 
 # ===== 编译后复制资源 =====
@@ -54,8 +62,11 @@ add_custom_command(TARGET main POST_BUILD
     COMMENT "Sync res folder to build dir"
 )
 
+# 从源码 lib/${PBOX_ABI}/libproot.so 复制到 build/lib/${PBOX_ABI}/libproot.so
 add_custom_command(TARGET main POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:main>/lib/${PBOX_ABI}
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    ${PROJECT_SOURCE_DIR}/lib/libproot.so $<TARGET_FILE_DIR:main>/lib/libproot.so
-    COMMENT "Copy libproot.so to build dir"
+    ${PROJECT_SOURCE_DIR}/lib/${PBOX_ABI}/libproot.so
+    $<TARGET_FILE_DIR:main>/lib/${PBOX_ABI}/libproot.so
+    COMMENT "Copy libproot.so (ABI:${PBOX_ABI}) to build/lib/${PBOX_ABI}"
 )

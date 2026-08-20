@@ -1,15 +1,19 @@
 #include "download_rootfs.hpp"
 #include "write_log.h"
+#include "call_so.h"
+
 #include <spdlog/spdlog.h>
-#include <cstdlib>
-#include <cstdio>
 #include <iostream>
 #include <filesystem>
-#include <archive.h>
-#include <archive_entry.h>
-#include <sys/stat.h>
+#include <cstdlib>
+#include <vector>
+#include <cstdio>
+#include <dlfcn.h>
+#include <fcntl.h>
 #include <unistd.h>
-#include <errno.h>
+#include <pwd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 
 namespace fs = std::filesystem;
 
@@ -30,18 +34,15 @@ bool download_rootfs(const std::string& relative_path,
 {
     auto logger = get_console_logger();
     auto mirrors = get_mirror_list();
-
     for (const auto& mirror : mirrors)
     {
         std::string url = mirror.base_url;
         if (!relative_path.empty() && relative_path.front() != '/')
             url += "/";
         url += relative_path;
-
         DBG(logger, debug, "尝试从【{}】下载: {}", mirror.name, url);
         std::string cmd = "wget -q --timeout=30 --tries=2 -O " + save_path + " " + url;
         int ret = system(cmd.c_str());
-
         if (ret == 0 && fs::exists(save_path) && fs::file_size(save_path) > 0)
         {
             DBG(logger, debug, "【{}】下载成功", mirror.name);
@@ -56,98 +57,23 @@ bool download_rootfs(const std::string& relative_path,
     return false;
 }
 
-/**
- * 解压完成后：手动补 proot 启动必须的核心软链接
- * 策略：不恢复 tar 内全部符号链接（避免 Android 权限崩溃），只补启动最低限度链接
- *
- * 关键点：
- * 1. usrmerge 根目录链接 /bin /lib /sbin 必须用【容器内绝对路径】字符串，不能用相对路径
- * 2. armhf: ld-linux-armhf.so.3 本身是实体 ELF 文件，禁止创建/覆盖其软链接
- * 3. arm64/amd64: ld-xxx.so 是指向 ld-2.xx.so 的符号链接，需要手动创建
- */
-static bool fix_minimal_symlinks(const std::string& rootfs_dir, const std::string& arch, bool debug)
+static std::string expand_tilde(const std::string& path)
 {
-    auto logger = get_console_logger();
-    std::vector<std::pair<std::string, std::string>> link_list;
-
-    // ===== usrmerge 根目录核心软链接（debian/ubuntu 必备）=====
-    // 第二个参数是写入软链接内部的字符串，必须是容器内绝对路径（以 / 开头）
-    link_list.emplace_back(rootfs_dir + "/bin", "/usr/bin");
-    link_list.emplace_back(rootfs_dir + "/lib", "/usr/lib");
-    link_list.emplace_back(rootfs_dir + "/sbin", "/usr/sbin");
-
-    // ===== 架构相关：动态链接器软链接 =====
-    if (arch == "armhf" || arch == "armel")
-    {
-        // armhf 特殊：usr/lib/arm-linux-gnueabihf/ld-linux-armhf.so.3 是真实实体文件
-        // 不需要创建任何 ld 相关软链接，此处留空
-        DBG(logger, debug, "armhf架构：ld-linux-armhf.so.3为实体文件，跳过ld软链接创建");
-    }
-    else if (arch == "arm64" || arch == "aarch64")
-    {
-        fs::path lib_dir = fs::path(rootfs_dir) / "usr/lib/aarch64-linux-gnu";
-        std::error_code ec;
-        fs::create_directories(lib_dir, ec);
-        link_list.emplace_back(rootfs_dir + "/lib64", "/usr/lib");
-        link_list.emplace_back(lib_dir.string() + "/ld-linux-aarch64.so.1", "ld-2.35.so");
-    }
-    else if (arch == "amd64" || arch == "x86_64")
-    {
-        fs::path lib_dir = fs::path(rootfs_dir) / "usr/lib/x86_64-linux-gnu";
-        std::error_code ec;
-        fs::create_directories(lib_dir, ec);
-        link_list.emplace_back(rootfs_dir + "/lib64", "/usr/lib");
-        link_list.emplace_back(lib_dir.string() + "/ld-linux-x86-64.so.2", "ld-2.35.so");
-    }
-
-    // ===== 通用工具软链接 =====
-    link_list.emplace_back(rootfs_dir + "/bin/sh", "/usr/bin/bash");
-
-    for (auto &item : link_list)
-    {
-        const std::string& dst = item.first;
-        const std::string& target = item.second;
-
-        // 已存在则跳过（不覆盖，避免破坏实体文件）
-        if (fs::exists(dst))
-        {
-            DBG(logger, debug, "软链接已存在，跳过: {}", dst);
-            continue;
-        }
-
-        // 确保父目录存在
-        fs::path parent = fs::path(dst).parent_path();
-        std::error_code ec;
-        fs::create_directories(parent, ec);
-
-        int rc = symlink(target.c_str(), dst.c_str());
-        if (rc != 0)
-        {
-            DBG(logger, debug, "创建软链接失败 {} -> {} errno={}", dst, target, errno);
-        }
-        else
-        {
-            DBG(logger, debug, "创建软链接 {} -> {}", dst, target);
-        }
-    }
-    return true;
+    if (path.empty() || path[0] != '~') return path;
+    const char* home = getenv("HOME");
+    if (!home) home = getpwuid(getuid())->pw_dir;
+    return std::string(home) + path.substr(1);
 }
 
-/**
- * tar解压：
- * - 普通文件：写入，还原tar原始mode权限（保留可执行位）
- * - 目录：创建，还原目录mode
- * - symlink/设备/fifo：全部跳过，不从tar读取（避免Android权限崩溃）
- * - 权限异常直接跳过该条目，不终止整体流程
- * - strip-components=1：剥离tar第一层目录
- * @param arch 镜像架构 armhf / aarch64 / amd64，用于补ld软链接
- */
+using ProotMainFunc = int (*)(int argc, char** argv);
+
 bool extract_rootfs(const std::string& tar_path,
                     const std::string& rootfs_dir,
-                    const std::string& arch,
+                    const std::string& /*arch*/,
                     bool debug)
 {
     auto logger = get_console_logger();
+
     if (!fs::exists(tar_path))
     {
         std::cerr << "[错误] 压缩包不存在，解压失败\n";
@@ -155,8 +81,7 @@ bool extract_rootfs(const std::string& tar_path,
         return false;
     }
 
-    try
-    {
+    try {
         fs::create_directories(rootfs_dir);
     }
     catch (const fs::filesystem_error& e)
@@ -166,142 +91,98 @@ bool extract_rootfs(const std::string& tar_path,
         return false;
     }
 
-    struct archive* a = archive_read_new();
-    struct archive_entry* entry;
-    archive_read_support_filter_xz(a);
-    archive_read_support_format_tar(a);
-
-    int r = archive_read_open_filename(a, tar_path.c_str(), 10240);
-    if (r != ARCHIVE_OK)
+    void* so_handle = nullptr;
+    const std::string libproot_path = "./lib/libproot.so";
+    auto proot_main = load_dynamic_lib<ProotMainFunc>(libproot_path, "main", &so_handle);
+    if (!proot_main || !so_handle)
     {
-        std::cerr << "[错误] 打开压缩包失败: " << archive_error_string(a) << "\n";
-        DBG(logger, debug, "打开tar.xz失败:{}", archive_error_string(a));
-        archive_read_free(a);
+        DBG(logger, debug, "加载libproot.so失败: {}", dlerror());
+        close_lib_handle(so_handle);
         return false;
     }
 
-    bool has_valid_file = false;
-    while (archive_read_next_header(a, &entry) == ARCHIVE_OK)
+    std::string real_tar = expand_tilde(tar_path);
+    std::string real_dest = expand_tilde(rootfs_dir);
+
+    DBG(logger, debug, "调用proot tar解压: proot --link2symlink tar -pJxvf {} -C {}", real_tar, real_dest);
+
+    // 对应命令：proot --link2symlink tar -pJxvf tar.xz -C dest
+    std::vector<const char*> argv_list = {
+        "proot",
+        "--link2symlink",
+        "tar",
+        "-pJxvf",
+        real_tar.c_str(),
+        "-C",
+        real_dest.c_str(),
+        nullptr
+    };
+    int argc = static_cast<int>(argv_list.size()) - 1;
+    char** argv = const_cast<char**>(argv_list.data());
+
+    int ret_code = -1;
+    pid_t pid = fork();
+    if (pid == 0)
     {
-        std::string entry_path = archive_entry_pathname(entry);
+        // 子进程执行proot tar解压
+        int devnull = open("/dev/null", O_RDWR);
+        dup2(devnull, STDOUT_FILENO);
+        dup2(devnull, STDERR_FILENO);
+        close(devnull);
 
-        // strip-components=1，剥离tar第一层目录
-        size_t slash_pos = entry_path.find('/');
-        if (slash_pos != std::string::npos)
-            entry_path = entry_path.substr(slash_pos + 1);
-        if (entry_path.empty())
-        {
-            archive_read_data_skip(a);
-            continue;
-        }
-
-        fs::path out_path = fs::path(rootfs_dir) / entry_path;
-        auto entry_type = archive_entry_filetype(entry);
-
-        // tar包内符号链接、设备、FIFO：全部跳过，不从归档解压
-        if (entry_type != AE_IFREG && entry_type != AE_IFDIR)
-        {
-            archive_read_data_skip(a);
-            continue;
-        }
-
-        try
-        {
-            fs::path parent = out_path.parent_path();
-            fs::create_directories(parent);
-
-            if (entry_type == AE_IFREG)
-            {
-                FILE* out_fp = fopen(out_path.c_str(), "wb");
-                if (out_fp != nullptr)
-                {
-                    char buf[8192];
-                    la_ssize_t len;
-                    while ((len = archive_read_data(a, buf, sizeof(buf))) > 0)
-                    {
-                        fwrite(buf, 1, len, out_fp);
-                    }
-                    fclose(out_fp);
-
-                    // 还原tar归档内原始文件权限，保留可执行位
-                    // & 0777 屏蔽 setuid/setgid 高位，Android不支持
-                    mode_t file_mode = archive_entry_mode(entry);
-                    chmod(out_path.c_str(), file_mode & 0777);
-
-                    has_valid_file = true;
-                }
-                else
-                {
-                    // open失败，权限不足，跳过该文件
-                    DBG(logger, debug, "跳过无权限文件:{}", out_path.string());
-                    archive_read_data_skip(a);
-                    continue;
-                }
-            }
-            else if (entry_type == AE_IFDIR)
-            {
-                fs::create_directories(out_path);
-                // 还原目录权限
-                mode_t dir_mode = archive_entry_mode(entry);
-                chmod(out_path.c_str(), dir_mode & 0777);
-            }
-        }
-        catch (const fs::filesystem_error& e)
-        {
-            // 权限/不支持操作，跳过当前条目，继续解压其他
-            DBG(logger, debug, "跳过权限异常条目 {} : {}", out_path.string(), e.what());
-            archive_read_data_skip(a);
-            continue;
-        }
-
-        archive_read_data_skip(a);
+        void* child_handle = nullptr;
+        auto child_func = load_dynamic_lib<ProotMainFunc>(libproot_path, "main", &child_handle);
+        if (child_func && child_handle)
+            child_func(argc, argv);
+        _exit(127);
     }
-
-    archive_read_close(a);
-    archive_read_free(a);
-
-    if (!has_valid_file)
+    else if (pid > 0)
     {
-        std::cerr << "[错误] 压缩包内无有效系统文件\n";
-        DBG(logger, debug, "解压后无有效文件");
-        try {
-            fs::remove_all(rootfs_dir);
-        } catch (...) {}
+        int wstatus;
+        waitpid(pid, &wstatus, 0);
+        if (WIFEXITED(wstatus))
+            ret_code = WEXITSTATUS(wstatus);
+        DBG(logger, debug, "proot‑tar子进程退出码={}", ret_code);
+    }
+    else
+    {
+        close_lib_handle(so_handle);
         return false;
     }
 
-    DBG(logger, debug, "纯C++解压完成，目录:{}", rootfs_dir);
-    // 解压结束，根据架构补必须的动态链接器和usrmerge软链接
-    fix_minimal_symlinks(rootfs_dir, arch, debug);
+    close_lib_handle(so_handle);
 
-    // ===== 修复 /etc/resolv.conf：删除 systemd-resolved 软链接，写入普通DNS文件 =====
-    // Debian/Ubuntu rootfs 中 /etc/resolv.conf 是指向 /run/systemd/resolve/... 的符号链接
-    // proot 无 systemd-resolved，会导致 apt 报 Temporary failure resolving
+    if (ret_code != 0)
     {
-        std::string resolv_file = rootfs_dir + "/etc/resolv.conf";
-        // 删除可能存在的符号链接或旧文件
-        std::remove(resolv_file.c_str());
-        FILE* fp = fopen(resolv_file.c_str(), "w");
-        if (fp != nullptr)
-        {
-            fputs("nameserver 114.114.114.114\n", fp);
-            fputs("nameserver 223.5.5.5\n", fp);
-            fputs("nameserver 8.8.8.8\n", fp);
-            fclose(fp);
-            DBG(logger, debug, "已修复 /etc/resolv.conf DNS配置");
-        }
-        else
-        {
-            DBG(logger, debug, "写入 resolv.conf 失败");
-        }
+        DBG(logger, debug, "proot tar解压失败 ret={}", ret_code);
+        try { fs::remove_all(real_dest); } catch (...) {}
+        return false;
     }
 
-    // 创建 rootfs 内 config 目录（容器级配置存放位置）
+    // 修复 resolv.conf DNS（保留，proot环境apt必须）
+    std::string resolv_file = real_dest + "/etc/resolv.conf";
+    std::remove(resolv_file.c_str());
+    FILE* fp = fopen(resolv_file.c_str(), "w");
+    if (fp != nullptr)
+    {
+        fputs("nameserver 114.114.114.114\n", fp);
+        fputs("nameserver 223.5.5.5\n", fp);
+        fputs("nameserver 8.8.8.8\n", fp);
+        fclose(fp);
+        DBG(logger, debug, "已修复 /etc/resolv.conf DNS配置");
+    }
+    else
+    {
+        DBG(logger, debug, "写入 resolv.conf 失败");
+    }
+
+    // 创建config目录
     try
     {
-        fs::create_directories(fs::path(rootfs_dir) / "config");
+        fs::create_directories(fs::path(real_dest) / "config");
     }
     catch (...) {}
 
+    DBG(logger, debug, "proot‑tar解压完成: {}", real_dest);
     return true;
 }
