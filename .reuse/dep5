@@ -1,0 +1,14 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: Pbox
+Upstream-Contact: fengchenkeji <399233159@qq.com>
+Source: shturl.cc/fabhmrUsqRZHBppNzbGx9GT1KtKdT
+
+Files: src/* include/* CMakeLists.txt build.sh git_commit.sh README.md THIRD_PARTY_NOTICES.md
+Copyright: 2026 fengchenkeji
+License: GPL-3.0-or-later
+
+Files: lib/*/libproot.so
+Copyright: Proot developers
+License: GPL-2.0-or-later
+Comment: Pre‑compiled shared library. Not present in Termux official repository, bundled within this software package.
+LicenseFile: third_party/proot/LICENSE

@@ -89,5 +89,12 @@ Pbox/
 - armhf 架构下 ld-linux-armhf.so.3 为实体文件，不创建覆盖软链接
 - proot 启动参数：--link2symlink --kill-on-exit --sysvipc -0，绑定 /dev /proc /sys
 
-## License
-GPL-3.0
+## Licenses
+
+Pbox is released under **GPL‑3.0‑or‑later**, see `COPYING` file.
+
+### Third‑party components
+- `libproot.so`: Pre‑bundled (GPL‑2.0‑or‑later), **not from Termux official repo**.
+- spdlog, libcurl, libarchive, nlohmann‑json: Depend on Termux system packages.
+
+See [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) for full third‑party copyright information.

@@ -11,18 +11,29 @@ endif()
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O2 -Wall")
 
-# 优先使用ANDROID_ABI；否则使用传入的PBOX_ABI
+# 自动识别架构：termux aarch64 -> arm64‑v8a；arm -> armeabi‑v7a
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^aarch64|arm64")
+    set(PBOX_NATIVE_ABI "arm64‑v8a")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^arm")
+    set(PBOX_NATIVE_ABI "armeabi‑v7a")
+else()
+    message(WARNING "Unknown arch, fallback to armeabi‑v7a")
+    set(PBOX_NATIVE_ABI "armeabi‑v7a")
+endif()
+
+# 允许外部覆盖 ABI，优先 ANDROID_ABI，其次 -DPBOX_ABI，最后自动识别
 if(ANDROID_ABI)
     set(PBOX_ABI "${ANDROID_ABI}")
-elseif(NOT PBOX_ABI)
-    message(WARNING "PBOX_ABI not set, default to armeabi‑v7a, pass -DPBOX_ABI=arm64‑v8a for 64bit")
-    set(PBOX_ABI "armeabi‑v7a")
+elseif(PBOX_ABI)
+    set(PBOX_ABI "${PBOX_ABI}")
+else()
+    set(PBOX_ABI "${PBOX_NATIVE_ABI}")
 endif()
 
 message(STATUS "PBOX target ABI: ${PBOX_ABI}")
 
-# 输出目录：库输出到 build/lib/${PBOX_ABI}
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib/${PBOX_ABI})
+# 库输出目录：直接 build/lib，不再带abi子文件夹
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 
 # 头文件目录
@@ -62,11 +73,13 @@ add_custom_command(TARGET main POST_BUILD
     COMMENT "Sync res folder to build dir"
 )
 
-# 从源码 lib/${PBOX_ABI}/libproot.so 复制到 build/lib/${PBOX_ABI}/libproot.so
+# 自动根据识别到的ABI复制 libproot.so 到 build/lib/ （不再嵌套abi子目录）
+set(PROOT_SOURCE_SO "${PROJECT_SOURCE_DIR}/lib/${PBOX_ABI}/libproot.so")
+
 add_custom_command(TARGET main POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:main>/lib/${PBOX_ABI}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/lib
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    ${PROJECT_SOURCE_DIR}/lib/${PBOX_ABI}/libproot.so
-    $<TARGET_FILE_DIR:main>/lib/${PBOX_ABI}/libproot.so
-    COMMENT "Copy libproot.so (ABI:${PBOX_ABI}) to build/lib/${PBOX_ABI}"
+    ${PROOT_SOURCE_SO}
+    ${CMAKE_BINARY_DIR}/lib/libproot.so
+    COMMENT "Copy libproot.so (ABI:${PBOX_ABI}) -> build/lib/libproot.so"
 )
