@@ -11,46 +11,49 @@ endif()
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O2 -Wall")
 
-# 自动识别架构：termux aarch64 -> arm64‑v8a；arm -> armeabi‑v7a
+# 架构识别，定义对应文件列表
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "^aarch64|arm64")
-    set(PBOX_NATIVE_ABI "arm64‑v8a")
+    set(PBOX_ABI_DIR "arm64‑v8a")
+    set(SO_FILES
+        libproot.so
+        libproot-loader.so
+        libproot-loader32.so
+        libtalloc.so.2
+    )
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^arm")
-    set(PBOX_NATIVE_ABI "armeabi‑v7a")
+    set(PBOX_ABI_DIR "armeabi‑v7a")
+    set(SO_FILES
+        libproot.so
+        libproot-loader.so
+        libtalloc.so.2
+    )
 else()
     message(WARNING "Unknown arch, fallback to armeabi‑v7a")
-    set(PBOX_NATIVE_ABI "armeabi‑v7a")
+    set(PBOX_ABI_DIR "armeabi‑v7a")
+    set(SO_FILES
+        libproot.so
+        libproot-loader.so
+        libtalloc.so.2
+    )
 endif()
 
-# 允许外部覆盖 ABI，优先 ANDROID_ABI，其次 -DPBOX_ABI，最后自动识别
-if(ANDROID_ABI)
-    set(PBOX_ABI "${ANDROID_ABI}")
-elseif(PBOX_ABI)
-    set(PBOX_ABI "${PBOX_ABI}")
-else()
-    set(PBOX_ABI "${PBOX_NATIVE_ABI}")
-endif()
+message(STATUS "PBOX target ABI dir: ${PBOX_ABI_DIR}")
+message(STATUS "Files to copy: ${SO_FILES}")
 
-message(STATUS "PBOX target ABI: ${PBOX_ABI}")
-
-# 库输出目录：直接 build/lib，不再带abi子文件夹
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 
-# 头文件目录
 include_directories(${PROJECT_SOURCE_DIR}/include)
 
-# 依赖库
 find_package(spdlog REQUIRED)
 find_package(CURL REQUIRED)
 
-# ===== 动态库：libinitialization.so =====
 add_library(initialization SHARED
     src/initialization.cpp
     src/container_config.cpp
 )
 target_link_libraries(initialization PRIVATE dl spdlog::spdlog)
 
-# ===== 主程序 =====
 add_executable(main
     src/main.cpp
     src/Cli_menu.cpp
@@ -66,20 +69,29 @@ target_link_libraries(main PRIVATE
     CURL::libcurl
 )
 
-# ===== 编译后复制资源 =====
+# 复制资源文件夹
 add_custom_command(TARGET main POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
     ${PROJECT_SOURCE_DIR}/res $<TARGET_FILE_DIR:main>/res
     COMMENT "Sync res folder to build dir"
 )
 
-# 自动根据识别到的ABI复制 libproot.so 到 build/lib/ （不再嵌套abi子目录）
-set(PROOT_SOURCE_SO "${PROJECT_SOURCE_DIR}/lib/${PBOX_ABI}/libproot.so")
+# 逐个复制文件，每个文件都拼接完整源路径
+set(PBOX_SO_ROOT "${PROJECT_SOURCE_DIR}/lib/${PBOX_ABI_DIR}")
+message(STATUS "Prebuilt so root dir: ${PBOX_SO_ROOT}")
 
+# 先创建目标目录
 add_custom_command(TARGET main POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/lib
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    ${PROOT_SOURCE_SO}
-    ${CMAKE_BINARY_DIR}/lib/libproot.so
-    COMMENT "Copy libproot.so (ABI:${PBOX_ABI}) -> build/lib/libproot.so"
+    COMMENT "Create output lib dir"
 )
+
+# 循环复制每个架构对应的so文件
+foreach(so_file ${SO_FILES})
+    add_custom_command(TARGET main POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${PBOX_SO_ROOT}/${so_file}
+            ${CMAKE_BINARY_DIR}/lib/
+        COMMENT "Copy ${so_file}"
+    )
+endforeach()
