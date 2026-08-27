@@ -17,6 +17,7 @@
  */
 #include "initialization.h"
 #include "container_config.h"
+#include "call_so.h"
 
 #include <dlfcn.h>
 #include <string>
@@ -111,7 +112,7 @@ extern "C" int run_proot(const char* exe_dir,
         DBG(logger, debug, "dlopen libproot.so 失败: {}", dlerror());
         return -1;
     }
-    auto proot_main = reinterpret_cast<ProotMain>(dlsym(handle, "main"));
+    auto proot_main = reinterpret_cast<ProotMain>(dlsym_with_elf_fallback(handle, proot_so_path.c_str(), "main"));
     if (!proot_main)
     {
         DBG(logger, debug, "dlsym main 失败: {}", dlerror());
