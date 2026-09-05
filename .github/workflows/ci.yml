@@ -1,0 +1,200 @@
+name: Pbox CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ============================================================
+  # Job 1: 基础编译检查（Ubuntu x86_64，验证代码可编译）
+  # ============================================================
+  build-linux:
+    name: Build (Linux x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake \
+            g++ \
+            pkg-config \
+            libspdlog-dev \
+            libcurl4-openssl-dev \
+            nlohmann-json3-dev \
+            libfmt-dev
+
+      - name: Configure
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_FLAGS="-Os -Wall"
+
+      - name: Build
+        run: |
+          cmake --build build -j$(nproc)
+
+      - name: Verify artifacts
+        run: |
+          echo "=== Build output ==="
+          ls -la build/
+          ls -la build/lib/ 2>/dev/null || true
+          file build/main 2>/dev/null || true
+          file build/lib/libinitialization.so 2>/dev/null || true
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pbox-linux-x86_64
+          path: |
+            build/main
+            build/lib/*.so
+          retention-days: 7
+
+  # ============================================================
+  # Job 2: 使用 Termux Docker 环境交叉编译 Android 版本
+  # ============================================================
+  build-termux:
+    name: Build (Termux Android)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [aarch64, arm]
+      fail-fast: false
+    steps:
+      - name: Checkout Pbox
+        uses: actions/checkout@v4
+        with:
+          path: Pbox
+
+      - name: Checkout termux-packages
+        uses: actions/checkout@v4
+        with:
+          repository: fengchenkeji/termux-packages
+          path: termux-packages
+          ref: master
+
+      - name: Prepare Pbox source for termux build
+        run: |
+          # 创建源码 tarball（termux-packages 构建需要）
+          cd Pbox
+          tar czf ../pbox-src.tar.gz --exclude=.git .
+          cd ..
+          # 计算 sha256
+          SHA256=$(sha256sum pbox-src.tar.gz | awk '{print $1}')
+          echo "PBOX_SRC_SHA256=$SHA256" >> $GITHUB_ENV
+          echo "Source SHA256: $SHA256"
+          ls -la pbox-src.tar.gz
+
+      - name: Build with termux Docker
+        run: |
+          # 使用 termux-packages 的 Docker 构建环境
+          cd termux-packages
+
+          # 复制 pbox 包定义（使用本地源码）
+          mkdir -p packages/pbox
+          cat > packages/pbox/build.sh << 'PKGEOF'
+          TERMUX_PKG_HOMEPAGE=https://github.com/fengchenkeji/Pbox
+          TERMUX_PKG_DESCRIPTION="A proot container management tool for Termux"
+          TERMUX_PKG_LICENSE="GPL-3.0"
+          TERMUX_PKG_LICENSE_FILE="COPYING"
+          TERMUX_PKG_MAINTAINER="fengchenkeji <399233159@qq.com>"
+          TERMUX_PKG_VERSION=0.0.1
+          TERMUX_PKG_SRCURL=file:///tmp/pbox-src.tar.gz
+          TERMUX_PKG_SHA256=PLACEHOLDER_SHA256
+          TERMUX_PKG_DEPENDS="libspdlog, libcurl, talloc, fmt, proot"
+          TERMUX_PKG_BUILD_IN_SRC=true
+
+          termux_step_make() {
+              cmake -S . -B build \
+                  -Wno-unused-cli \
+                  -DCMAKE_BUILD_TYPE=Release \
+                  -DCMAKE_INSTALL_PREFIX="${TERMUX_PREFIX}" \
+                  -DCMAKE_CXX_FLAGS="${CXXFLAGS}" \
+                  -DCMAKE_EXE_LINKER_FLAGS="${LDFLAGS}"
+              make -C build -j"$(nproc)"
+          }
+
+          termux_step_make_install() {
+              local INSTALL_ROOT="${TERMUX_PREFIX}/opt/Pbox"
+              mkdir -p "${INSTALL_ROOT}/lib"
+              mkdir -p "${INSTALL_ROOT}/res"
+              mkdir -p "${TERMUX_PREFIX}/bin"
+              cp -f "${TERMUX_PKG_SRCDIR}/build/main" "${INSTALL_ROOT}/pbox"
+              chmod +x "${INSTALL_ROOT}/pbox"
+              if [ -f "${TERMUX_PREFIX}/lib/libproot.so" ]; then
+                  cp -f "${TERMUX_PREFIX}/lib/libproot.so" "${INSTALL_ROOT}/lib/"
+              fi
+              if [ -f "${TERMUX_PREFIX}/lib/libproot-loader.so" ]; then
+                  cp -f "${TERMUX_PREFIX}/lib/libproot-loader.so" "${INSTALL_ROOT}/lib/"
+              fi
+              if [ -f "${TERMUX_PREFIX}/lib/libtalloc.so.2" ]; then
+                  cp -f "${TERMUX_PREFIX}/lib/libtalloc.so.2" "${INSTALL_ROOT}/lib/"
+              fi
+              if [ -d "${TERMUX_PKG_SRCDIR}/build/lib" ]; then
+                  cp -f "${TERMUX_PKG_SRCDIR}/build/lib/"*.so "${INSTALL_ROOT}/lib/" 2>/dev/null || true
+              fi
+              if [ -d "${TERMUX_PKG_SRCDIR}/res" ]; then
+                  cp -r "${TERMUX_PKG_SRCDIR}/res/"* "${INSTALL_ROOT}/res/" 2>/dev/null || true
+              fi
+              cat > "${TERMUX_PREFIX}/bin/pbox" << 'PBLAUNCHER'
+          #!/data/data/com.termux/files/usr/bin/sh
+          export LD_LIBRARY_PATH="${PREFIX}/opt/Pbox/lib:${LD_LIBRARY_PATH}"
+          exec "${PREFIX}/opt/Pbox/pbox" "$@"
+          PBLAUNCHER
+              chmod +x "${TERMUX_PREFIX}/bin/pbox"
+          }
+          PKGEOF
+
+          # 替换 sha256
+          sed -i "s/PLACEHOLDER_SHA256/${PBOX_SRC_SHA256}/" packages/pbox/build.sh
+
+          # 复制源码到 /tmp
+          cp ../pbox-src.tar.gz /tmp/pbox-src.tar.gz
+
+          # 拉取 termux 构建 Docker 镜像并构建
+          docker pull ghcr.io/termux/package-builder:latest 2>/dev/null || true
+
+          # 运行构建
+          docker run --rm \
+            -v "$(pwd):/home/builder/termux-packages" \
+            -v "/tmp/pbox-src.tar.gz:/tmp/pbox-src.tar.gz" \
+            -e TERMUX_ARCH=${{ matrix.arch }} \
+            ghcr.io/termux/package-builder:latest \
+            ./build-package.sh -a ${{ matrix.arch }} pbox 2>&1 | tee build-${{ matrix.arch }}.log
+
+          echo "=== Build exit code: $? ==="
+
+      - name: Collect Termux build artifacts
+        if: always()
+        run: |
+          cd termux-packages
+          echo "=== Built packages ==="
+          find . -name "*.deb" -type f 2>/dev/null | head -20
+          echo "=== Build output dir ==="
+          ls -la output/ 2>/dev/null || true
+
+      - name: Upload Termux build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: termux-build-logs-${{ matrix.arch }}
+          path: termux-packages/build-*.log
+          retention-days: 7
+
+      - name: Upload Termux deb packages
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pbox-termux-${{ matrix.arch }}
+          path: termux-packages/**/*.deb
+          retention-days: 30
