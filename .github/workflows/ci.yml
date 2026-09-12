@@ -250,7 +250,7 @@ jobs:
           ls "$VCPKG_INSTALLED/lib/" | grep -E "spdlog|curl|fmt" | head -10
           ls "$VCPKG_INSTALLED/include/" | grep -E "spdlog|curl" | head -10
 
-          # Use NDK cmake toolchain + vcpkg installed dir as prefix
+          # Use NDK cmake toolchain + manual deps from vcpkg (avoids find_package issues)
           if [ "${{ matrix.arch }}" = "aarch64" ]; then
             ABI="arm64-v8a"
           else
@@ -263,11 +263,8 @@ jobs:
             -DANDROID_ABI="$ABI" \
             -DANDROID_PLATFORM=android-24 \
             -DANDROID_STL=c++_shared \
-            -DCMAKE_PREFIX_PATH="$VCPKG_INSTALLED" \
-            -DCMAKE_FIND_ROOT_PATH="$VCPKG_INSTALLED" \
-            -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
-            -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH \
-            -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH \
+            -DPBOX_MANUAL_DEPS=ON \
+            -DPBOX_DEPS_ROOT="$VCPKG_INSTALLED" \
             -DCMAKE_EXE_LINKER_FLAGS="-L$VCPKG_INSTALLED/lib" \
             -DCMAKE_SHARED_LINKER_FLAGS="-L$VCPKG_INSTALLED/lib" 2>&1
 
