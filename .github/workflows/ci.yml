@@ -184,13 +184,79 @@ jobs:
       - name: Build pbox .deb with termux Docker
         run: |
           cd termux-packages
-          # The termux-packages repo already has packages/pbox/build.sh
-          # which uses git+https source and builds all deps automatically
-          echo "=== pbox package build.sh ==="
-          cat packages/pbox/build.sh
+
+          # Create pbox package (fengchenkeji/termux-packages fork doesn't have it)
+          mkdir -p packages/pbox
+          cat > packages/pbox/build.sh << 'PKGEOF'
+          TERMUX_PKG_HOMEPAGE=https://github.com/fengchenkeji/Pbox
+          TERMUX_PKG_DESCRIPTION="A proot container management tool for Termux"
+          TERMUX_PKG_LICENSE="GPL-3.0"
+          TERMUX_PKG_LICENSE_FILE="COPYING"
+          TERMUX_PKG_MAINTAINER="fengchenkeji <399233159@qq.com>"
+          TERMUX_PKG_VERSION=0.0.1
+          TERMUX_PKG_SRCURL=git+https://github.com/fengchenkeji/Pbox.git
+          TERMUX_PKG_GIT_BRANCH=main
+          TERMUX_PKG_DEPENDS="libspdlog, libcurl, talloc, fmt, proot"
+          TERMUX_PKG_BUILD_IN_SRC=true
+
+          termux_step_make() {
+              cmake -S . -B build \
+                  -Wno-unused-cli \
+                  -DCMAKE_BUILD_TYPE=Release \
+                  -DCMAKE_INSTALL_PREFIX="${TERMUX_PREFIX}" \
+                  -DCMAKE_CXX_FLAGS="${CXXFLAGS}" \
+                  -DCMAKE_EXE_LINKER_FLAGS="${LDFLAGS}"
+              make -C build -j"$(nproc)"
+          }
+
+          termux_step_make_install() {
+              local INSTALL_ROOT="${TERMUX_PREFIX}/opt/Pbox"
+              mkdir -p "${INSTALL_ROOT}/lib"
+              mkdir -p "${INSTALL_ROOT}/res"
+              mkdir -p "${TERMUX_PREFIX}/bin"
+              mkdir -p "${TERMUX_PREFIX}/share/doc/${TERMUX_PKG_NAME}"
+
+              cp -f "${TERMUX_PKG_SRCDIR}/build/main" "${INSTALL_ROOT}/pbox"
+              chmod +x "${INSTALL_ROOT}/pbox"
+
+              # Use system libproot.so and loader (built by proot dependency)
+              if [ -f "${TERMUX_PREFIX}/lib/libproot.so" ]; then
+                  cp -f "${TERMUX_PREFIX}/lib/libproot.so" "${INSTALL_ROOT}/lib/"
+              fi
+              if [ -f "${TERMUX_PREFIX}/lib/libproot-loader.so" ]; then
+                  cp -f "${TERMUX_PREFIX}/lib/libproot-loader.so" "${INSTALL_ROOT}/lib/"
+              fi
+              if [ -f "${TERMUX_PREFIX}/lib/libtalloc.so.2" ]; then
+                  cp -f "${TERMUX_PREFIX}/lib/libtalloc.so.2" "${INSTALL_ROOT}/lib/"
+              fi
+
+              # Copy cmake-built .so (libinitialization.so)
+              if [ -d "${TERMUX_PKG_SRCDIR}/build/lib" ]; then
+                  cp -f "${TERMUX_PKG_SRCDIR}/build/lib/"*.so "${INSTALL_ROOT}/lib/" 2>/dev/null || true
+              fi
+
+              # Copy resources
+              if [ -d "${TERMUX_PKG_SRCDIR}/res" ]; then
+                  cp -r "${TERMUX_PKG_SRCDIR}/res/"* "${INSTALL_ROOT}/res/" 2>/dev/null || true
+              fi
+
+              # Launcher script
+              cat > "${TERMUX_PREFIX}/bin/pbox" << 'PBLAUNCHER'
+          #!/data/data/com.termux/files/usr/bin/sh
+          export LD_LIBRARY_PATH="${PREFIX}/opt/Pbox/lib:${LD_LIBRARY_PATH}"
+          exec "${PREFIX}/opt/Pbox/pbox" "$@"
+          PBLAUNCHER
+              chmod +x "${TERMUX_PREFIX}/bin/pbox"
+
+              # License files
+              install -Dm644 "${TERMUX_PKG_SRCDIR}/COPYING" "${TERMUX_PREFIX}/share/doc/${TERMUX_PKG_NAME}/COPYING" 2>/dev/null || true
+          }
+          PKGEOF
+
+          echo "=== pbox build.sh created ==="
+          head -5 packages/pbox/build.sh
 
           echo "=== Starting build for ${{ matrix.arch }} ==="
-          # Run build, capture output to file, then print it
           docker run --rm \
             -v "$(pwd):/home/builder/termux-packages" \
             -e TERMUX_ARCH=${{ matrix.arch }} \
@@ -198,8 +264,8 @@ jobs:
             ./build-package.sh -a ${{ matrix.arch }} pbox > build-${{ matrix.arch }}.log 2>&1
           BUILD_RC=$?
           echo "=== Build exit code: ${BUILD_RC} ==="
-          echo "=== Build log (last 100 lines) ==="
-          tail -100 build-${{ matrix.arch }}.log
+          echo "=== Build log (last 150 lines) ==="
+          tail -150 build-${{ matrix.arch }}.log
           if [ ${BUILD_RC} -ne 0 ]; then
             echo "::error::Termux build failed (exit ${BUILD_RC})"
             exit ${BUILD_RC}
