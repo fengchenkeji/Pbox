@@ -196,46 +196,51 @@ jobs:
           echo "RELEASE_DIR=$RELEASE_DIR" >> $GITHUB_ENV
           echo "[PASS] Static verification"
 
-      - name: Download Termux dependency packages
+      - name: Setup vcpkg and build Android dependencies
         run: |
-          # Map arch to termux repo arch
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            VCPKG_TRIPLET="arm64-android"
+          else
+            VCPKG_TRIPLET="arm-neon-android"
+          fi
+          echo "VCPKG_TRIPLET=$VCPKG_TRIPLET"
+          echo "VCPKG_TRIPLET=$VCPKG_TRIPLET" >> $GITHUB_ENV
+
+          export ANDROID_NDK_HOME="$NDK_DIR"
+          export VCPKG_ROOT=/tmp/vcpkg
+
+          # Install vcpkg
+          cd /tmp
+          git clone --depth 1 https://github.com/microsoft/vcpkg.git 2>&1 | tail -3
+          cd vcpkg
+          ./bootstrap-vcpkg.sh -disableMetrics 2>&1 | tail -3
+
+          # Build spdlog and curl for Android
+          ./vcpkg install spdlog curl --triplet "$VCPKG_TRIPLET" 2>&1 | tail -30
+
+          echo "=== Installed libs ==="
+          ls "$VCPKG_ROOT/installed/$VCPKG_TRIPLET/lib/" | head -20
+          echo "=== Installed headers ==="
+          ls "$VCPKG_ROOT/installed/$VCPKG_TRIPLET/include/" | head -20
+
+          # Also download libtalloc from Termux (not in vcpkg)
           if [ "${{ matrix.arch }}" = "aarch64" ]; then
             REPO_ARCH="aarch64"
           else
             REPO_ARCH="arm"
           fi
           REPO="https://packages.termux.dev/apt/termux-main"
-          SYSROOT=/tmp/termux-sysroot
-          mkdir -p "$SYSROOT"
-
-          # Download Packages index
           curl -fL "${REPO}/dists/stable/main/binary-${REPO_ARCH}/Packages" -o /tmp/Packages
-          echo "Packages index: $(wc -l < /tmp/Packages) lines"
-
-          # Function to find and download a package
-          download_pkg() {
-            local pkgname=$1
-            local filename=$(grep -A20 "^Package: ${pkgname}$" /tmp/Packages | grep "^Filename:" | head -1 | awk '{print $2}')
-            if [ -z "$filename" ]; then
-              echo "::warning::Package $pkgname not found in index"
-              return 1
-            fi
-            local url="${REPO}/${filename}"
-            echo "Downloading $pkgname: $url"
-            curl -fL "$url" -o "/tmp/${pkgname}.deb"
-            dpkg-deb -x "/tmp/${pkgname}.deb" "$SYSROOT"
-            echo "  Extracted $pkgname"
-          }
-
-          # Download dependencies (libspdlog needs libfmt, libcurl needs openssl/zlib/etc)
-          for pkg in libfmt libspdlog libcurl libtalloc openssl zlib libnghttp2 libandroid-support libandroid-spawn; do
-            download_pkg $pkg || true
-          done
-
-          echo "=== Sysroot contents ==="
-          find "$SYSROOT" -name "*.so" -o -name "*.h" | head -30
-          ls "$SYSROOT/data/data/com.termux/files/usr/lib/" 2>/dev/null | head -20
-          ls "$SYSROOT/data/data/com.termux/files/usr/include/" 2>/dev/null | head -20
+          TALLOC_DEB=$(grep -A20 "^Package: libtalloc$" /tmp/Packages | grep "^Filename:" | head -1 | awk '{print $2}')
+          if [ -n "$TALLOC_DEB" ]; then
+            curl -fL "${REPO}/${TALLOC_DEB}" -o /tmp/libtalloc.deb
+            mkdir -p /tmp/talloc-extract
+            dpkg-deb -x /tmp/libtalloc.deb /tmp/talloc-extract
+            find /tmp/talloc-extract -name "libtalloc*"
+            cp /tmp/talloc-extract/data/data/com.termux/files/usr/lib/libtalloc.so* "$VCPKG_ROOT/installed/$VCPKG_TRIPLET/lib/" 2>/dev/null || true
+            echo "Copied libtalloc to vcpkg lib dir"
+          fi
+          echo "VCPKG_ROOT=$VCPKG_ROOT" >> $GITHUB_ENV
 
       - name: Cross-compile Pbox with NDK
         run: |
@@ -256,25 +261,30 @@ jobs:
 
           echo "CC=$CC"
           echo "CXX=$CXX"
-          ls "$CC" 2>/dev/null && echo "[OK] compiler found" || { echo "::error::compiler not found"; ls "$NDK_BIN"/*clang* 2>/dev/null | head -10; exit 1; }
+          ls "$CC" 2>/dev/null && echo "[OK] compiler found" || { echo "::error::compiler not found"; exit 1; }
 
-          echo "=== Sysroot deps ==="
-          ls "$SYSROOT/lib/" 2>/dev/null | grep -E "spdlog|curl|fmt|talloc" | head -10
-          ls "$SYSROOT/include/" 2>/dev/null | grep -E "spdlog|curl|fmt|talloc" | head -10
+          VCPKG_INSTALLED="$VCPKG_ROOT/installed/$VCPKG_TRIPLET"
+          echo "=== vcpkg deps ==="
+          ls "$VCPKG_INSTALLED/lib/" | grep -E "spdlog|curl|fmt" | head -10
+          ls "$VCPKG_INSTALLED/include/" | grep -E "spdlog|curl" | head -10
 
-          # Build with manual deps (avoids find_package issues in cross-compile)
+          # Build with vcpkg toolchain (find_package works properly)
           cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER="$CC" \
             -DCMAKE_CXX_COMPILER="$CXX" \
             -DCMAKE_SYSROOT="$ANDROID_SYSROOT" \
-            -DPBOX_MANUAL_DEPS=ON \
-            -DPBOX_DEPS_ROOT="$SYSROOT" \
-            -DCMAKE_CXX_FLAGS="-I${SYSROOT}/include" \
-            -DCMAKE_EXE_LINKER_FLAGS="-L${SYSROOT}/lib" \
-            -DCMAKE_SHARED_LINKER_FLAGS="-L${SYSROOT}/lib" 2>&1
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_TARGET_TRIPLET="$VCPKG_TRIPLET" \
+            -DANDROID_ABI=${{ matrix.arch }} \
+            -DCMAKE_FIND_ROOT_PATH="$VCPKG_INSTALLED" \
+            -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
+            -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH \
+            -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH \
+            -DCMAKE_EXE_LINKER_FLAGS="-L$VCPKG_INSTALLED/lib" \
+            -DCMAKE_SHARED_LINKER_FLAGS="-L$VCPKG_INSTALLED/lib" 2>&1
 
-          echo "=== CMake configure done, building ==="
+          echo "=== Building ==="
           make -C build -j"$(nproc)" VERBOSE=1 2>&1
 
           echo "=== Build artifacts ==="
@@ -311,8 +321,13 @@ jobs:
           # Copy libproot.so and loaders from Android-Proot-Builder release
           cp /tmp/proot-release/${RELEASE_DIR}/*.so "$PKG_ROOT${TERMUX_PREFIX}/opt/Pbox/lib/" 2>/dev/null || true
 
-          # Copy talloc from sysroot
-          cp /tmp/termux-sysroot${TERMUX_PREFIX}/lib/libtalloc.so* "$PKG_ROOT${TERMUX_PREFIX}/opt/Pbox/lib/" 2>/dev/null || true
+          # Bundle vcpkg-built runtime libraries (spdlog, curl, fmt, openssl, zlib, etc.)
+          VCPKG_INSTALLED="$VCPKG_ROOT/installed/$VCPKG_TRIPLET"
+          for lib in "$VCPKG_INSTALLED"/lib/lib*.so*; do
+            [ -f "$lib" ] && cp -a "$lib" "$PKG_ROOT${TERMUX_PREFIX}/opt/Pbox/lib/" 2>/dev/null || true
+          done
+          # Also copy libtalloc if available
+          cp "$VCPKG_INSTALLED"/lib/libtalloc.so* "$PKG_ROOT${TERMUX_PREFIX}/opt/Pbox/lib/" 2>/dev/null || true
 
           # Copy resources
           cp -r res/* "$PKG_ROOT${TERMUX_PREFIX}/opt/Pbox/res/" 2>/dev/null || true
@@ -374,7 +389,7 @@ jobs:
 
           echo "=== Running pbox --help with qemu-user ==="
           export QEMU_LD_PREFIX="$ANDROID_SYSROOT"
-          export LD_LIBRARY_PATH="/tmp/pbox-test${TERMUX_PREFIX}/opt/Pbox/lib:/tmp/termux-sysroot${TERMUX_PREFIX}/lib:${LD_LIBRARY_PATH}"
+          export LD_LIBRARY_PATH="/tmp/pbox-test${TERMUX_PREFIX}/opt/Pbox/lib:${LD_LIBRARY_PATH}"
           $QEMU "$PBOX_BIN" --help 2>&1 || echo "pbox --help exit: $?"
 
           echo "=== dlopen test: cross-compile test program ==="
