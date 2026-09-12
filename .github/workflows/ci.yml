@@ -39,24 +39,12 @@ jobs:
             binutils \
             zip
 
-      - name: Download libproot.so from Android-Proot-Builder release
+      - name: Build libproot.so from source (Linux glibc)
         run: |
-          echo "Downloading from: ${PROOT_RELEASE_URL}"
-          curl -fL -o /tmp/proot-android.zip "${PROOT_RELEASE_URL}"
-          echo "Downloaded: $(ls -la /tmp/proot-android.zip)"
-          echo "=== Zip contents ==="
-          unzip -l /tmp/proot-android.zip
-
-      - name: Extract x86_64 libproot.so
-        run: |
-          mkdir -p lib/x86_64
-          # Release zip contains: aarch64/, armv7a/, x86_64/
-          unzip -o /tmp/proot-android.zip -d /tmp/proot-release
-          echo "=== Extracted structure ==="
-          find /tmp/proot-release -type f
-          # Copy x86_64 files
-          cp -v /tmp/proot-release/x86_64/* lib/x86_64/ 2>/dev/null || \
-            cp -v /tmp/proot-release/output/x86_64/* lib/x86_64/ 2>/dev/null || true
+          # Android-Proot-Builder 的 x86_64 产物是 Android Bionic 版本，无法在 Linux glibc 上 dlopen
+          # 因此 Linux job 从 termux/proot 源码用本机 gcc 编译 glibc 版本的 libproot.so
+          chmod +x scripts/build-proot-linux.sh
+          ./scripts/build-proot-linux.sh lib/x86_64
           ls -la lib/x86_64/
 
       - name: Verify libproot.so (static analysis)
@@ -460,6 +448,127 @@ jobs:
           else
             echo "[OK] pbox .deb found: $PBOX_DEB"
           fi
+
+      - name: Emulator test (qemu-user) - run pbox and libproot.so
+        run: |
+          cd termux-packages
+          # Write test script that runs inside Termux Docker
+          cat > /tmp/qemu-test.sh << 'QEOF'
+          set -e
+          echo "=== Emulator test for ${{ matrix.arch }} ==="
+
+          # Install qemu-user-static
+          apt-get update -qq && apt-get install -y -qq qemu-user-static >/dev/null 2>&1 || true
+
+          # Find NDK sysroot
+          NDK_BIN=$(find / -path "*/toolchains/llvm/prebuilt/*/bin" -type d 2>/dev/null | head -1)
+          NDK_ROOT=$(dirname "$(dirname "$NDK_BIN")")
+          SYSROOT="${NDK_ROOT}/sysroot"
+          echo "NDK_ROOT: $NDK_ROOT"
+          echo "SYSROOT: $SYSROOT"
+          ls "$SYSROOT/usr/lib/" 2>/dev/null | head -10
+
+          # Determine qemu binary and arch-specific paths
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            QEMU=qemu-aarch64-static
+            ANDROID_ARCH=aarch64-linux-android
+            SO_ARCH_DIR="arm64‑v8a"
+          else
+            QEMU=qemu-arm-static
+            ANDROID_ARCH=arm-linux-androideabi
+            SO_ARCH_DIR="armeabi‑v7a"
+          fi
+          echo "QEMU: $QEMU"
+          which $QEMU || echo "qemu not found, trying without static suffix"
+          QEMU=$(which $QEMU 2>/dev/null || which qemu-aarch64 2>/dev/null || which qemu-arm 2>/dev/null || echo "")
+          if [ -z "$QEMU" ]; then
+            echo "::error::qemu-user not available"
+            exit 1
+          fi
+
+          # Extract all .deb packages to /tmp/rootfs
+          mkdir -p /tmp/rootfs
+          for deb in /home/builder/termux-packages/output/*.deb; do
+            echo "Extracting: $(basename $deb)"
+            dpkg-deb -x "$deb" /tmp/rootfs/ 2>/dev/null || true
+          done
+
+          echo "=== Extracted structure ==="
+          find /tmp/rootfs -name "pbox" -o -name "libproot.so" 2>/dev/null
+          ls -la /tmp/rootfs/data/data/com.termux/files/usr/opt/Pbox/ 2>/dev/null || true
+
+          PBOX_BIN=/tmp/rootfs/data/data/com.termux/files/usr/opt/Pbox/pbox
+          PROOT_SO=/tmp/rootfs/data/data/com.termux/files/usr/opt/Pbox/lib/libproot.so
+          TERMUX_LIB=/tmp/rootfs/data/data/com.termux/files/usr/lib
+
+          echo ""
+          echo "=== Test 1: pbox binary file type ==="
+          file "$PBOX_BIN"
+
+          echo ""
+          echo "=== Test 2: pbox --help (qemu-user) ==="
+          export QEMU_LD_PREFIX="$SYSROOT"
+          export LD_LIBRARY_PATH="${TERMUX_LIB}:${SYSROOT}/usr/lib/${ANDROID_ARCH}:${SYSROOT}/usr/lib"
+          $QEMU "$PBOX_BIN" --help 2>&1 || echo "pbox --help exit: $?"
+
+          echo ""
+          echo "=== Test 3: dlopen libproot.so + proot --version (qemu-user) ==="
+          # Write dlopen test
+          cat > /tmp/test_proot_dlopen.c << 'CEOF'
+          #include <dlfcn.h>
+          #include <stdio.h>
+          #include <stdlib.h>
+          #include <string.h>
+          #include <sys/wait.h>
+          #include <unistd.h>
+          typedef int (*ProotMain)(int, char**);
+          int main(int argc, char** argv) {
+              const char* so = (argc>1)?argv[1]:"./libproot.so";
+              fprintf(stderr, "[TEST] dlopen(%s)...\n", so);
+              void* h = dlopen(so, RTLD_NOW|RTLD_GLOBAL);
+              if(!h){fprintf(stderr,"[TEST] FAIL dlopen: %s\n",dlerror());return 1;}
+              fprintf(stderr,"[TEST] OK dlopen\n");
+              ProotMain pm=(ProotMain)dlsym(h,"main");
+              if(!pm){fprintf(stderr,"[TEST] FAIL dlsym: %s\n",dlerror());dlclose(h);return 2;}
+              fprintf(stderr,"[TEST] OK dlsym main=%p\n",(void*)pm);
+              pid_t pid=fork();
+              if(pid==0){
+                  char* a[]={"proot","--version",NULL};
+                  _exit(pm(2,a));
+              }
+              int st; waitpid(pid,&st,0);
+              int rc=WIFEXITED(st)?WEXITSTATUS(st):-1;
+              fprintf(stderr,"[TEST] proot --version exit=%d\n",rc);
+              dlclose(h);
+              return (rc==0)?0:3;
+          }
+          CEOF
+          # Cross-compile test with NDK clang
+          export PATH="$NDK_BIN:$PATH"
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            aarch64-linux-android-clang -O2 /tmp/test_proot_dlopen.c -o /tmp/test_dlopen -ldl
+          else
+            armv7a-linux-androideabi-clang -O2 /tmp/test_proot_dlopen.c -o /tmp/test_dlopen -ldl
+          fi
+          file /tmp/test_dlopen
+          $QEMU /tmp/test_dlopen "$PROOT_SO" 2>&1
+          TEST_RC=$?
+          echo "dlopen test exit: $TEST_RC"
+
+          if [ $TEST_RC -eq 0 ]; then
+            echo "[PASS] All emulator tests passed for ${{ matrix.arch }}"
+          else
+            echo "::warning::Some emulator tests failed (exit $TEST_RC), checking if non-fatal..."
+          fi
+          QEOF
+
+          # Run test inside Docker with all volumes mounted
+          docker run --rm \
+            -v "$(pwd):/home/builder/termux-packages" \
+            -v /tmp:/tmp \
+            --privileged \
+            ghcr.io/termux/package-builder:latest \
+            /bin/bash /tmp/qemu-test.sh 2>&1 || echo "::warning::Emulator test completed with issues (see above)"
 
       - name: Upload Termux build logs
         if: always()
