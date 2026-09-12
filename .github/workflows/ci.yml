@@ -256,16 +256,28 @@ jobs:
           echo "=== pbox build.sh created ==="
           head -5 packages/pbox/build.sh
 
+          echo "=== Debug: check build-package.sh ==="
+          ls -la build-package.sh
+          chmod +x build-package.sh
+          head -3 build-package.sh
+
+          echo "=== Debug: docker info ==="
+          docker --version
+          docker images | grep termux || echo "no termux images cached"
+
+          echo "=== Pulling docker image ==="
+          docker pull ghcr.io/termux/package-builder:latest
+
           echo "=== Starting build for ${{ matrix.arch }} ==="
           docker run --rm \
             -v "$(pwd):/home/builder/termux-packages" \
             -e TERMUX_ARCH=${{ matrix.arch }} \
             ghcr.io/termux/package-builder:latest \
-            ./build-package.sh -a ${{ matrix.arch }} pbox > build-${{ matrix.arch }}.log 2>&1
+            bash /home/builder/termux-packages/build-package.sh -a ${{ matrix.arch }} pbox > build-${{ matrix.arch }}.log 2>&1
           BUILD_RC=$?
           echo "=== Build exit code: ${BUILD_RC} ==="
-          echo "=== Build log (last 150 lines) ==="
-          tail -150 build-${{ matrix.arch }}.log
+          echo "=== Build log (full) ==="
+          cat build-${{ matrix.arch }}.log
           if [ ${BUILD_RC} -ne 0 ]; then
             echo "::error::Termux build failed (exit ${BUILD_RC})"
             exit ${BUILD_RC}
