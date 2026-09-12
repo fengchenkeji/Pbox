@@ -120,6 +120,22 @@ extern "C" int run_proot(const char* exe_dir,
         return -2;
     }
 
+    // 设置 proot loader 环境变量（Android 版 proot 使用外部 loader，未内置）
+    // libproot-loader.so 是静态链接的 ELF 可执行文件，命名为 .so 以便从 lib 目录执行
+    std::string loader_path = exeDir + "/lib/libproot-loader.so";
+    if (access(loader_path.c_str(), F_OK) == 0)
+    {
+        setenv("PROOT_LOADER", loader_path.c_str(), 1);
+        DBG(logger, debug, "设置 PROOT_LOADER={}", loader_path);
+    }
+    // 64 位架构下还需要 32 位兼容 loader
+    std::string loader32_path = exeDir + "/lib/libproot-loader32.so";
+    if (access(loader32_path.c_str(), F_OK) == 0)
+    {
+        setenv("PROOT_LOADER_32", loader32_path.c_str(), 1);
+        DBG(logger, debug, "设置 PROOT_LOADER_32={}", loader32_path);
+    }
+
     // 选择 shell
     const char* shell_cmd;
     const char* shell_arg = nullptr;
