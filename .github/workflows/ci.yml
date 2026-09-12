@@ -245,38 +245,25 @@ jobs:
       - name: Cross-compile Pbox with NDK
         run: |
           cd Pbox
-          NDK_BIN="${NDK_DIR}/toolchains/llvm/prebuilt/${HOST_TAG}/bin"
-          SYSROOT=/tmp/termux-sysroot/data/data/com.termux/files/usr
-          ANDROID_SYSROOT="${NDK_DIR}/toolchains/llvm/prebuilt/${HOST_TAG}/sysroot"
-
-          if [ "${{ matrix.arch }}" = "aarch64" ]; then
-            CC="${NDK_BIN}/aarch64-linux-android24-clang"
-            CXX="${NDK_BIN}/aarch64-linux-android24-clang++"
-            ANDROID_ARCH="aarch64-linux-android"
-          else
-            CC="${NDK_BIN}/armv7a-linux-androideabi24-clang"
-            CXX="${NDK_BIN}/armv7a-linux-androideabi24-clang++"
-            ANDROID_ARCH="arm-linux-androideabi"
-          fi
-
-          echo "CC=$CC"
-          echo "CXX=$CXX"
-          ls "$CC" 2>/dev/null && echo "[OK] compiler found" || { echo "::error::compiler not found"; exit 1; }
-
           VCPKG_INSTALLED="$VCPKG_ROOT/installed/$VCPKG_TRIPLET"
           echo "=== vcpkg deps ==="
           ls "$VCPKG_INSTALLED/lib/" | grep -E "spdlog|curl|fmt" | head -10
           ls "$VCPKG_INSTALLED/include/" | grep -E "spdlog|curl" | head -10
 
-          # Build with vcpkg toolchain (find_package works properly)
+          # Use NDK cmake toolchain + vcpkg installed dir as prefix
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            ABI="arm64-v8a"
+          else
+            ABI="armeabi-v7a"
+          fi
+
           cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER="$CC" \
-            -DCMAKE_CXX_COMPILER="$CXX" \
-            -DCMAKE_SYSROOT="$ANDROID_SYSROOT" \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_TARGET_TRIPLET="$VCPKG_TRIPLET" \
-            -DANDROID_ABI=${{ matrix.arch }} \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK_DIR/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI="$ABI" \
+            -DANDROID_PLATFORM=android-24 \
+            -DANDROID_STL=c++_shared \
+            -DCMAKE_PREFIX_PATH="$VCPKG_INSTALLED" \
             -DCMAKE_FIND_ROOT_PATH="$VCPKG_INSTALLED" \
             -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
             -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH \
