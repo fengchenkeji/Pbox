@@ -22,6 +22,13 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^aarch64|arm64")
         libproot-loader32.so
         libtalloc.so.2
     )
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^x86_64|amd64|x64")
+    # Linux x86_64 测试构建：libproot.so 由本机 gcc 编译为 ET_DYN 共享对象，
+    # talloc 使用系统库（/usr/lib/x86_64-linux-gnu/libtalloc.so.2），无需 loader。
+    set(PBOX_ABI_DIR "x86_64")
+    set(SO_FILES
+        libproot.so
+    )
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^arm")
     set(PBOX_ABI_DIR "armeabi‑v7a")
     set(SO_FILES

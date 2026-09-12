@@ -12,10 +12,10 @@ env:
 
 jobs:
   # ============================================================
-  # Job 1: 基础编译检查（Ubuntu x86_64，验证代码可编译）
+  # Job 1: Linux x86_64 构建 + libproot.so 调用链路测试
   # ============================================================
   build-linux:
-    name: Build (Linux x86_64)
+    name: Build & Test (Linux x86_64)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -31,25 +31,61 @@ jobs:
             libspdlog-dev \
             libcurl4-openssl-dev \
             nlohmann-json3-dev \
-            libfmt-dev
+            libfmt-dev \
+            libtalloc-dev \
+            libarchive-dev \
+            binutils
 
-      - name: Configure
+      - name: Build libproot.so (x86_64)
+        run: |
+          chmod +x scripts/build-proot-linux.sh
+          ./scripts/build-proot-linux.sh lib/x86_64
+
+      - name: Verify libproot.so
+        run: |
+          echo "=== libproot.so info ==="
+          file lib/x86_64/libproot.so
+          echo "=== main symbol check ==="
+          nm -D lib/x86_64/libproot.so 2>/dev/null | grep -w main || \
+            nm lib/x86_64/libproot.so 2>/dev/null | grep -w main || \
+            echo "main symbol check via readelf:"
+          readelf -s lib/x86_64/libproot.so | grep -w main | head -5
+
+      - name: Configure Pbox
         run: |
           cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CXX_FLAGS="-Os -Wall"
 
-      - name: Build
+      - name: Build Pbox
         run: |
           cmake --build build -j$(nproc)
 
-      - name: Verify artifacts
+      - name: Verify build artifacts
         run: |
           echo "=== Build output ==="
           ls -la build/
-          ls -la build/lib/ 2>/dev/null || true
-          file build/main 2>/dev/null || true
-          file build/lib/libinitialization.so 2>/dev/null || true
+          ls -la build/lib/
+          echo "=== main binary ==="
+          file build/main
+          echo "=== libinitialization.so ==="
+          file build/lib/libinitialization.so
+          echo "=== libproot.so (copied) ==="
+          file build/lib/libproot.so
+
+      - name: Test libproot.so call chain
+        run: |
+          chmod +x scripts/test-proot-call.sh
+          ./scripts/test-proot-call.sh build
+
+      - name: Test Pbox CLI
+        run: |
+          cd build
+          echo "=== pbox --help ==="
+          ./main --help
+          echo ""
+          echo "=== pbox list (first 10 lines) ==="
+          ./main list 2>&1 | head -10 || true
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -58,6 +94,7 @@ jobs:
           path: |
             build/main
             build/lib/*.so
+            lib/x86_64/libproot.so
           retention-days: 7
 
   # ============================================================
@@ -131,6 +168,17 @@ jobs:
               mkdir -p "${TERMUX_PREFIX}/bin"
               cp -f "${TERMUX_PKG_SRCDIR}/build/main" "${INSTALL_ROOT}/pbox"
               chmod +x "${INSTALL_ROOT}/pbox"
+              # 复制预编译的 libproot.so 等（从源码 lib 目录）
+              if [ "${TERMUX_ARCH}" = "aarch64" ]; then
+                  SO_ARCH_DIR="arm64‑v8a"
+              else
+                  SO_ARCH_DIR="armeabi‑v7a"
+              fi
+              local SO_SRC_DIR="${TERMUX_PKG_SRCDIR}/lib/${SO_ARCH_DIR}"
+              if [ -d "${SO_SRC_DIR}" ]; then
+                  cp -f "${SO_SRC_DIR}/"*.so* "${INSTALL_ROOT}/lib/" 2>/dev/null || true
+              fi
+              # 同时从 termux 系统库复制（如果存在）
               if [ -f "${TERMUX_PREFIX}/lib/libproot.so" ]; then
                   cp -f "${TERMUX_PREFIX}/lib/libproot.so" "${INSTALL_ROOT}/lib/"
               fi
