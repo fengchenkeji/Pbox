@@ -406,9 +406,8 @@ jobs:
             -v "$(pwd):/home/builder/termux-packages" \
             -v "/tmp/pbox-src.tar.gz:/tmp/pbox-src.tar.gz" \
             -e TERMUX_ARCH=${{ matrix.arch }} \
-            -w /home/builder/termux-packages \
             ghcr.io/termux/package-builder:latest \
-            /bin/bash -c "./build-package.sh -a ${{ matrix.arch }} pbox" 2>&1 | tee build-${{ matrix.arch }}.log
+            ./build-package.sh -a ${{ matrix.arch }} pbox 2>&1 | tee build-${{ matrix.arch }}.log
           DOCKER_EXIT=${PIPESTATUS[0]}
           echo "=== Docker build exit code: ${DOCKER_EXIT} ==="
 
