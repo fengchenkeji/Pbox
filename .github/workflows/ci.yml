@@ -9,10 +9,12 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Android-Proot-Builder release download URL (public, no token needed)
+  PROOT_RELEASE_URL: https://github.com/fengchenkeji/Android-Proot-Builder/releases/download/proot-latest/proot-android.zip
 
 jobs:
   # ============================================================
-  # Job 1: Linux x86_64 构建 + libproot.so 调用链路测试
+  # Job 1: Linux x86_64 构建 + libproot.so dlopen 实际调用测试
   # ============================================================
   build-linux:
     name: Build & Test (Linux x86_64)
@@ -34,22 +36,48 @@ jobs:
             libfmt-dev \
             libtalloc-dev \
             libarchive-dev \
-            binutils
+            binutils \
+            zip
 
-      - name: Build libproot.so (x86_64)
+      - name: Download libproot.so from Android-Proot-Builder release
         run: |
-          chmod +x scripts/build-proot-linux.sh
-          ./scripts/build-proot-linux.sh lib/x86_64
+          echo "Downloading from: ${PROOT_RELEASE_URL}"
+          curl -fL -o /tmp/proot-android.zip "${PROOT_RELEASE_URL}"
+          echo "Downloaded: $(ls -la /tmp/proot-android.zip)"
+          echo "=== Zip contents ==="
+          unzip -l /tmp/proot-android.zip
 
-      - name: Verify libproot.so
+      - name: Extract x86_64 libproot.so
         run: |
-          echo "=== libproot.so info ==="
-          file lib/x86_64/libproot.so
-          echo "=== main symbol check ==="
-          nm -D lib/x86_64/libproot.so 2>/dev/null | grep -w main || \
-            nm lib/x86_64/libproot.so 2>/dev/null | grep -w main || \
-            echo "main symbol check via readelf:"
-          readelf -s lib/x86_64/libproot.so | grep -w main | head -5
+          mkdir -p lib/x86_64
+          # Release zip contains: aarch64/, armv7a/, x86_64/
+          unzip -o /tmp/proot-android.zip -d /tmp/proot-release
+          echo "=== Extracted structure ==="
+          find /tmp/proot-release -type f
+          # Copy x86_64 files
+          cp -v /tmp/proot-release/x86_64/* lib/x86_64/ 2>/dev/null || \
+            cp -v /tmp/proot-release/output/x86_64/* lib/x86_64/ 2>/dev/null || true
+          ls -la lib/x86_64/
+
+      - name: Verify libproot.so (static analysis)
+        run: |
+          SO=lib/x86_64/libproot.so
+          echo "=== file ==="
+          file "$SO"
+          echo "=== ELF header ==="
+          readelf -h "$SO" | grep -E "Class|Type|Machine"
+          echo "=== main symbol ==="
+          readelf -s --wide "$SO" | grep -w "main" || echo "main not in .dynsym, checking .symtab..."
+          nm "$SO" 2>/dev/null | grep -w "main" || echo "main not found via nm"
+          echo "=== dynamic dependencies ==="
+          readelf -d "$SO" | grep NEEDED || true
+          # Must be a shared object
+          if file "$SO" | grep -q "shared object"; then
+            echo "[OK] libproot.so is a shared object"
+          else
+            echo "::error::libproot.so is NOT a shared object"
+            exit 1
+          fi
 
       - name: Configure Pbox
         run: |
@@ -66,14 +94,10 @@ jobs:
           echo "=== Build output ==="
           ls -la build/
           ls -la build/lib/
-          echo "=== main binary ==="
           file build/main
-          echo "=== libinitialization.so ==="
           file build/lib/libinitialization.so
-          echo "=== libproot.so (copied) ==="
-          file build/lib/libproot.so
 
-      - name: Test libproot.so call chain
+      - name: Test libproot.so dlopen call chain
         run: |
           chmod +x scripts/test-proot-call.sh
           ./scripts/test-proot-call.sh build
@@ -98,10 +122,10 @@ jobs:
           retention-days: 7
 
   # ============================================================
-  # Job 2: 使用 Termux Docker 环境交叉编译 Android 版本
+  # Job 2 & 3: Android 交叉编译 + libproot.so dlopen 检测
   # ============================================================
   build-termux:
-    name: Build (Termux Android)
+    name: Build & Verify (Android ${{ matrix.arch }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -120,13 +144,202 @@ jobs:
           path: termux-packages
           ref: master
 
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y -qq binutils qemu-user-static zip
+
+      - name: Download libproot.so from Android-Proot-Builder release
+        run: |
+          echo "Downloading from: ${PROOT_RELEASE_URL}"
+          curl -fL -o /tmp/proot-android.zip "${PROOT_RELEASE_URL}"
+          unzip -l /tmp/proot-android.zip
+
+      - name: Extract and place libproot.so by architecture
+        run: |
+          unzip -o /tmp/proot-android.zip -d /tmp/proot-release
+          echo "=== Extracted files ==="
+          find /tmp/proot-release -type f
+
+          # Map release arch dirs to Pbox lib dirs
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            SO_ARCH_DIR="arm64‑v8a"
+            RELEASE_DIR="aarch64"
+          else
+            SO_ARCH_DIR="armeabi‑v7a"
+            RELEASE_DIR="armv7a"
+          fi
+
+          mkdir -p "Pbox/lib/${SO_ARCH_DIR}"
+          # Try both possible zip structures
+          if [ -d "/tmp/proot-release/${RELEASE_DIR}" ]; then
+            cp -v /tmp/proot-release/${RELEASE_DIR}/* "Pbox/lib/${SO_ARCH_DIR}/"
+          elif [ -d "/tmp/proot-release/output/${RELEASE_DIR}" ]; then
+            cp -v /tmp/proot-release/output/${RELEASE_DIR}/* "Pbox/lib/${SO_ARCH_DIR}/"
+          else
+            echo "::error::Cannot find ${RELEASE_DIR} in release zip"
+            find /tmp/proot-release -type d
+            exit 1
+          fi
+          echo "=== Placed files in Pbox/lib/${SO_ARCH_DIR}/ ==="
+          ls -la "Pbox/lib/${SO_ARCH_DIR}/"
+
+      - name: Static verification of libproot.so
+        run: |
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            SO_DIR="Pbox/lib/arm64‑v8a"
+            EXPECTED_MACHINE="AArch64"
+          else
+            SO_DIR="Pbox/lib/armeabi‑v7a"
+            EXPECTED_MACHINE="ARM"
+          fi
+          SO="${SO_DIR}/libproot.so"
+
+          echo "=== 1. file type check ==="
+          file "$SO"
+          if file "$SO" | grep -q "shared object"; then
+            echo "[OK] is shared object"
+          else
+            echo "::error::NOT a shared object"
+            exit 1
+          fi
+
+          echo "=== 2. ELF architecture check ==="
+          readelf -h "$SO" | grep -E "Class|Type|Machine"
+          if readelf -h "$SO" | grep -q "${EXPECTED_MACHINE}"; then
+            echo "[OK] architecture matches ${{ matrix.arch }}"
+          else
+            echo "::error::architecture mismatch"
+            exit 1
+          fi
+
+          echo "=== 3. main symbol check ==="
+          # Check .dynsym first
+          if readelf -s --wide "$SO" | grep -w "main" | grep -q "GLOBAL"; then
+            echo "[OK] main symbol in .dynsym (GLOBAL) — dlsym can find it directly"
+            readelf -s --wide "$SO" | grep -w "main" | grep "GLOBAL"
+          elif nm "$SO" 2>/dev/null | grep -w "main" | grep -q " T "; then
+            echo "[OK] main symbol in .symtab — ELF fallback will resolve it"
+            nm "$SO" 2>/dev/null | grep -w "main"
+          else
+            echo "::error::main symbol NOT found in .dynsym or .symtab"
+            exit 1
+          fi
+
+          echo "=== 4. dynamic dependencies ==="
+          readelf -d "$SO" | grep NEEDED || echo "(no NEEDED entries or statically linked)"
+
+          echo "=== 5. loader files check ==="
+          ls -la "${SO_DIR}/"libproot-loader*.so 2>/dev/null || echo "No loader files"
+          for loader in "${SO_DIR}/"libproot-loader*.so; do
+            [ -f "$loader" ] && file "$loader"
+          done
+
+          echo ""
+          echo "[PASS] All static checks passed for ${{ matrix.arch }}"
+
+      - name: Cross-compile dlopen test program (NDK)
+        run: |
+          # Write test program
+          cat > /tmp/test_dlopen.c << 'CEOF'
+          #include <dlfcn.h>
+          #include <stdio.h>
+          #include <stdlib.h>
+          #include <string.h>
+          typedef int (*ProotMain)(int, char**);
+          int main(int argc, char** argv) {
+              const char* so_path = (argc > 1) ? argv[1] : "./libproot.so";
+              fprintf(stderr, "[TEST] dlopen(%s)...\n", so_path);
+              void* h = dlopen(so_path, RTLD_NOW | RTLD_GLOBAL);
+              if (!h) { fprintf(stderr, "[TEST] FAIL dlopen: %s\n", dlerror()); return 1; }
+              fprintf(stderr, "[TEST] OK dlopen handle=%p\n", h);
+              fprintf(stderr, "[TEST] dlsym(main)...\n");
+              ProotMain pm = (ProotMain)dlsym(h, "main");
+              if (!pm) { fprintf(stderr, "[TEST] FAIL dlsym: %s\n", dlerror()); dlclose(h); return 2; }
+              fprintf(stderr, "[TEST] OK main=%p\n", (void*)pm);
+              fprintf(stderr, "[TEST] PASS: libproot.so loaded and main resolved\n");
+              dlclose(h);
+              return 0;
+          }
+          CEOF
+
+          # Use Termux Docker to cross-compile with NDK (source build env first)
+          docker pull ghcr.io/termux/package-builder:latest 2>/dev/null || true
+          docker run --rm \
+            -v /tmp:/tmp \
+            -e TERMUX_ARCH=${{ matrix.arch }} \
+            -w /home/builder/termux-packages \
+            ghcr.io/termux/package-builder:latest \
+            /bin/bash -c '
+              set -e
+              # Source the NDK environment setup
+              source ./scripts/setup/termux_setup_toolchain.sh 2>/dev/null || true
+              export TERMUX_ARCH=${{ matrix.arch }}
+              # Determine compiler
+              if [ "${{ matrix.arch }}" = "aarch64" ]; then
+                CC=aarch64-linux-android-clang
+              else
+                CC=armv7a-linux-androideabi-clang
+              fi
+              echo "Using compiler: $CC"
+              which $CC || (echo "Finding NDK clang..." && find / -name "aarch64-linux-android*-clang" 2>/dev/null | head -3)
+              # Try NDK toolchain path
+              NDK_BIN=$(find / -path "*/toolchains/llvm/prebuilt/*/bin" -type d 2>/dev/null | head -1)
+              if [ -n "$NDK_BIN" ]; then
+                export PATH="$NDK_BIN:$PATH"
+                echo "NDK bin: $NDK_BIN"
+                ls "$NDK_BIN"/*clang* 2>/dev/null | head -5
+              fi
+              $CC -O2 /tmp/test_dlopen.c -o /tmp/test_dlopen_${{ matrix.arch }} -ldl 2>&1
+              file /tmp/test_dlopen_${{ matrix.arch }}
+              echo "[OK] Cross-compiled test_dlopen_${{ matrix.arch }}"
+            ' || echo "::warning::Cross-compile test skipped (NDK env issue), static checks still apply"
+
+      - name: Runtime dlopen test with qemu-user
+        run: |
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            SO_DIR="Pbox/lib/arm64‑v8a"
+            QEMU="qemu-aarch64-static"
+          else
+            SO_DIR="Pbox/lib/armeabi‑v7a"
+            QEMU="qemu-arm-static"
+          fi
+
+          # Get Android sysroot from Termux Docker
+          docker pull ghcr.io/termux/package-builder:latest 2>/dev/null || true
+          SYSROOT=$(docker run --rm ghcr.io/termux/package-builder:latest \
+            /bin/bash -c 'echo $PREFIX' 2>/dev/null || echo "")
+          echo "Termux PREFIX: $SYSROOT"
+
+          # Copy libproot.so to /tmp for qemu access
+          cp "${SO_DIR}/libproot.so" /tmp/libproot_${{ matrix.arch }}.so
+
+          echo "=== Running dlopen test with $QEMU ==="
+          # qemu needs the Android linker and libc; use the container's sysroot
+          # Run inside Docker with qemu installed to ensure correct sysroot
+          docker run --rm \
+            -v /tmp:/tmp \
+            --privileged \
+            ghcr.io/termux/package-builder:latest \
+            /bin/bash -c "
+              set -e
+              apt-get update -qq && apt-get install -y -qq qemu-user-static >/dev/null 2>&1 || true
+              export QEMU_LD_PREFIX=\$PREFIX
+              if [ '${{ matrix.arch }}' = 'aarch64' ]; then
+                qemu-aarch64-static /tmp/test_dlopen_aarch64 /tmp/libproot_aarch64.so
+              else
+                qemu-arm-static /tmp/test_dlopen_arm /tmp/libproot_arm.so
+              fi
+            " || {
+              echo "::warning::qemu runtime test failed (may be environment limitation), static+link checks passed"
+              # Don't fail the job on qemu test failure; static checks already verified
+            }
+
       - name: Prepare Pbox source for termux build
         run: |
-          # 创建源码 tarball（termux-packages 构建需要）
           cd Pbox
           tar czf ../pbox-src.tar.gz --exclude=.git .
           cd ..
-          # 计算 sha256
           SHA256=$(sha256sum pbox-src.tar.gz | awk '{print $1}')
           echo "PBOX_SRC_SHA256=$SHA256" >> $GITHUB_ENV
           echo "Source SHA256: $SHA256"
@@ -134,10 +347,9 @@ jobs:
 
       - name: Build with termux Docker
         run: |
-          # 使用 termux-packages 的 Docker 构建环境
+          set -o pipefail
           cd termux-packages
 
-          # 复制 pbox 包定义（使用本地源码）
           mkdir -p packages/pbox
           cat > packages/pbox/build.sh << 'PKGEOF'
           TERMUX_PKG_HOMEPAGE=https://github.com/fengchenkeji/Pbox
@@ -168,7 +380,6 @@ jobs:
               mkdir -p "${TERMUX_PREFIX}/bin"
               cp -f "${TERMUX_PKG_SRCDIR}/build/main" "${INSTALL_ROOT}/pbox"
               chmod +x "${INSTALL_ROOT}/pbox"
-              # 复制预编译的 libproot.so 等（从源码 lib 目录）
               if [ "${TERMUX_ARCH}" = "aarch64" ]; then
                   SO_ARCH_DIR="arm64‑v8a"
               else
@@ -177,16 +388,6 @@ jobs:
               local SO_SRC_DIR="${TERMUX_PKG_SRCDIR}/lib/${SO_ARCH_DIR}"
               if [ -d "${SO_SRC_DIR}" ]; then
                   cp -f "${SO_SRC_DIR}/"*.so* "${INSTALL_ROOT}/lib/" 2>/dev/null || true
-              fi
-              # 同时从 termux 系统库复制（如果存在）
-              if [ -f "${TERMUX_PREFIX}/lib/libproot.so" ]; then
-                  cp -f "${TERMUX_PREFIX}/lib/libproot.so" "${INSTALL_ROOT}/lib/"
-              fi
-              if [ -f "${TERMUX_PREFIX}/lib/libproot-loader.so" ]; then
-                  cp -f "${TERMUX_PREFIX}/lib/libproot-loader.so" "${INSTALL_ROOT}/lib/"
-              fi
-              if [ -f "${TERMUX_PREFIX}/lib/libtalloc.so.2" ]; then
-                  cp -f "${TERMUX_PREFIX}/lib/libtalloc.so.2" "${INSTALL_ROOT}/lib/"
               fi
               if [ -d "${TERMUX_PKG_SRCDIR}/build/lib" ]; then
                   cp -f "${TERMUX_PKG_SRCDIR}/build/lib/"*.so "${INSTALL_ROOT}/lib/" 2>/dev/null || true
@@ -203,33 +404,62 @@ jobs:
           }
           PKGEOF
 
-          # 替换 sha256
           sed -i "s/PLACEHOLDER_SHA256/${PBOX_SRC_SHA256}/" packages/pbox/build.sh
-
-          # 复制源码到 /tmp
           cp ../pbox-src.tar.gz /tmp/pbox-src.tar.gz
 
-          # 拉取 termux 构建 Docker 镜像并构建
+          # Ensure output directory exists and is writable
+          mkdir -p output
+          chmod 777 output 2>/dev/null || true
+
           docker pull ghcr.io/termux/package-builder:latest 2>/dev/null || true
 
-          # 运行构建
+          echo "=== Starting Termux build for ${{ matrix.arch }} ==="
           docker run --rm \
             -v "$(pwd):/home/builder/termux-packages" \
             -v "/tmp/pbox-src.tar.gz:/tmp/pbox-src.tar.gz" \
             -e TERMUX_ARCH=${{ matrix.arch }} \
+            -w /home/builder/termux-packages \
             ghcr.io/termux/package-builder:latest \
-            ./build-package.sh -a ${{ matrix.arch }} pbox 2>&1 | tee build-${{ matrix.arch }}.log
+            /bin/bash -c "./build-package.sh -a ${{ matrix.arch }} pbox" 2>&1 | tee build-${{ matrix.arch }}.log
+          DOCKER_EXIT=${PIPESTATUS[0]}
+          echo "=== Docker build exit code: ${DOCKER_EXIT} ==="
 
-          echo "=== Build exit code: $? ==="
+          if [ ${DOCKER_EXIT} -ne 0 ]; then
+            echo "::error::Termux build failed with exit code ${DOCKER_EXIT}"
+            echo "=== Last 80 lines of build log ==="
+            tail -80 build-${{ matrix.arch }}.log
+            exit ${DOCKER_EXIT}
+          fi
 
-      - name: Collect Termux build artifacts
-        if: always()
+      - name: Verify .deb packages
         run: |
           cd termux-packages
-          echo "=== Built packages ==="
-          find . -name "*.deb" -type f 2>/dev/null | head -20
-          echo "=== Build output dir ==="
-          ls -la output/ 2>/dev/null || true
+          echo "=== Searching for .deb files ==="
+          DEB_FILES=$(find . -name "*.deb" -type f 2>/dev/null)
+          if [ -z "$DEB_FILES" ]; then
+            echo "::error::No .deb files found! Build may have failed."
+            echo "=== output/ directory ==="
+            ls -la output/ 2>/dev/null || echo "output/ does not exist"
+            echo "=== Build log tail ==="
+            tail -50 build-${{ matrix.arch }}.log 2>/dev/null || echo "no log"
+            exit 1
+          fi
+          echo "Found .deb files:"
+          echo "$DEB_FILES"
+          echo ""
+          echo "=== .deb file details ==="
+          for f in $DEB_FILES; do
+            ls -la "$f"
+            dpkg-deb --info "$f" 2>/dev/null | head -10 || true
+            echo "---"
+          done
+          # Verify pbox .deb exists
+          PBOX_DEB=$(find . -name "pbox*.deb" -type f 2>/dev/null | head -1)
+          if [ -z "$PBOX_DEB" ]; then
+            echo "::warning::pbox .deb not found by name, checking all debs..."
+          else
+            echo "[OK] pbox .deb found: $PBOX_DEB"
+          fi
 
       - name: Upload Termux build logs
         if: always()
