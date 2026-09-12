@@ -134,18 +134,34 @@ jobs:
 
       - name: Setup Android NDK
         run: |
-          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          ls "$ANDROID_NDK_HOME" 2>/dev/null || echo "NDK not at ANDROID_NDK_HOME"
-          # Find NDK
-          NDK_DIR=$(find /usr/local/lib/android/sdk/ndk -maxdepth 1 -type d 2>/dev/null | head -1)
+          # Find or install Android NDK
+          NDK_DIR=""
+          if [ -n "$ANDROID_NDK_HOME" ] && [ -d "$ANDROID_NDK_HOME" ]; then
+            NDK_DIR="$ANDROID_NDK_HOME"
+          elif [ -n "$ANDROID_HOME" ] && [ -d "$ANDROID_HOME/ndk" ]; then
+            NDK_DIR=$(find "$ANDROID_HOME/ndk" -maxdepth 1 -type d 2>/dev/null | sort | tail -1)
+          elif [ -d "/usr/local/lib/android/sdk/ndk" ]; then
+            NDK_DIR=$(find /usr/local/lib/android/sdk/ndk -maxdepth 1 -type d 2>/dev/null | sort | tail -1)
+          fi
+          if [ -z "$NDK_DIR" ] || [ ! -d "$NDK_DIR" ]; then
+            echo "NDK not found, installing via sdkmanager..."
+            SDKMANAGER=$(find "$ANDROID_HOME" -name "sdkmanager" -type f 2>/dev/null | head -1)
+            if [ -n "$SDKMANAGER" ]; then
+              yes | "$SDKMANAGER" --install "ndk;26.1.10909125" 2>&1 | tail -5
+            fi
+            NDK_DIR=$(find /usr/local/lib/android/sdk/ndk -maxdepth 1 -type d 2>/dev/null | sort | tail -1)
+          fi
           echo "NDK_DIR=$NDK_DIR"
-          echo "NDK_DIR=$NDK_DIR" >> $GITHUB_ENV
-          ls "$NDK_DIR/toolchains/llvm/prebuilt/" 2>/dev/null
+          if [ -z "$NDK_DIR" ] || [ ! -d "$NDK_DIR" ]; then
+            echo "::error::Cannot find Android NDK"
+            find / -name "ndk-build" -type f 2>/dev/null | head -5
+            exit 1
+          fi
           HOST_TAG=$(ls "$NDK_DIR/toolchains/llvm/prebuilt/" 2>/dev/null | head -1)
           echo "HOST_TAG=$HOST_TAG"
+          echo "NDK_DIR=$NDK_DIR" >> $GITHUB_ENV
           echo "HOST_TAG=$HOST_TAG" >> $GITHUB_ENV
-          echo "NDK toolchain bin: $NDK_DIR/toolchains/llvm/prebuilt/$HOST_TAG/bin"
+          ls "$NDK_DIR/toolchains/llvm/prebuilt/$HOST_TAG/bin/"*clang* 2>/dev/null | head -5
 
       - name: Download libproot.so from Android-Proot-Builder release
         run: |
