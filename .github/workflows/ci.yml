@@ -46,7 +46,8 @@ jobs:
       - name: Collect .deb artifact
         run: |
           mkdir -p /tmp/debs
-          find termux-packages/output -name "*.deb" -exec cp {} /tmp/debs/ \;
+          # 只收集 pbox 自己的 .deb，不收集依赖包（避免文件名含冒号等非法字符）
+          find termux-packages/output -name "pbox_*.deb" -exec cp {} /tmp/debs/ \;
           ls -la /tmp/debs/
           # 列出 deb 内容
           for deb in /tmp/debs/*.deb; do
