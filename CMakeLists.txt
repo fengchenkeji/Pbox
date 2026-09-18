@@ -72,6 +72,9 @@ target_link_libraries(main PRIVATE
     ${SPDLOG_LIB}
     ${CURL_LIB}
 )
+# 允许共享库未定义符号（termux 预编译库依赖 bionic libc，运行时由 Android 系统提供）
+target_link_options(main PRIVATE "-Wl,--allow-shlib-undefined")
+target_link_options(initialization PRIVATE "-Wl,--allow-shlib-undefined")
 # proot 已改为 fork+exec 调用，不再需要导出主程序符号给 libproot.so
 set_target_properties(main PROPERTIES
     BUILD_RPATH "${CMAKE_BINARY_DIR}/lib"
