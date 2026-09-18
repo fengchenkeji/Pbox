@@ -4,15 +4,19 @@
 
 ## 项目介绍
 
-Pbox 是一款运行在 Termux 环境下的轻量 proot 工具箱，无需 Android 设备 Root 权限，即可快速创建、初始化并管理 proot 容器，轻松搭建隔离的 Linux 运行环境。
+Pbox 是一款运行在 **Termux** 环境下的轻量 proot 容器管理工具，无需 Root 权限，即可快速创建、初始化并管理 proot 容器。
+
+**Pbox 自带 proot 二进制**，不依赖系统安装的 proot 包，通过相对路径调用，完全进程隔离。
 
 ## 核心功能
 
 1. **自动架构识别**：自动检测 Termux 用户空间架构（armhf/arm64/amd64），下载匹配的 rootfs 镜像
-2. **多镜像源容错**：内置清华、南阳理工、网易、阿里云、LXC 官方多个镜像源，自动切换
-3. **智能解压**：还原文件权限，自动补全 usrmerge 软链接，跳过 Android 不支持的设备文件/FIFO
+2. **多镜像源容错**：内置清华、南阳理工、LXC 官方多个镜像源，自动切换
+3. **智能解压**：还原文件权限，自动补全 usrmerge 软链接，跳过 Android 不支持的设备文件
 4. **容器管理**：install 下载安装，login 直接启动已安装容器，list 查看可用系统版本
-5. **完善日志**：控制台打印全部日志，错误日志持久化存储
+5. **自带 proot**：proot 二进制打包在 deb 内，使用相对路径调用，不依赖系统 proot
+6. **版本查询**：`pbox proot-version` 查看内置 proot 版本
+7. **进程隔离**：fork+exec 调用 proot，崩溃不影响主程序
 
 ## 命令用法
 
@@ -29,85 +33,98 @@ pbox install ubuntu:22.04
 # 启动已安装的容器
 pbox login ubuntu:22.04
 
-# 调试模式（输出详细日志）
+# 查看内置 proot 版本号
+pbox proot-version
+
+# 调试模式
 pbox --run_type=debug install ubuntu:22.04
 
 # 查看帮助
 pbox -h
 ```
 
-## 编译方式
+## 工作原理
 
-### 方式一：termux-packages 构建（推荐）
+Pbox 采用 **fork+exec** 方式调用自带的 proot：
+
+```
+pbox 主程序
+  └─ libinitialization.so
+       └─ fork()
+            └─ execv(bin/proot)  ← 自带 proot 二进制，相对路径
+```
+
+- proot 运行在独立子进程中，ptrace、信号处理完全隔离
+- proot 二进制位于 `opt/Pbox/bin/proot`
+- 主程序通过可执行文件所在目录定位 `bin/proot`，使用相对路径
+
+## 安装（Termux）
+
+下载 CI 构建的 `.deb` 包后直接安装：
+
+```bash
+# arm64 (大多数手机)
+dpkg -i pbox-aarch64.deb
+
+# arm32 (旧设备)
+dpkg -i pbox-arm.deb
+```
+
+安装后直接运行 `pbox` 即可。
+
+## 编译方式（termux-packages）
+
+Pbox 作为 termux-packages 包构建：
 
 ```bash
 git clone https://github.com/termux/termux-packages.git
 cd termux-packages
-./build-package.sh -a aarch64 Pbox
-```
 
-### 方式二：Termux 内手动编译
-
-```bash
-# 安装依赖
-pkg install cmake libspdlog libcurl libarchive clang
-
-# 编译
-mkdir build && cd build
-cmake ..
-make -j$(nproc)
+# 将 Pbox 的 build.sh 和源码放入 packages/pbox/
+# 然后构建
+./scripts/run-docker.sh ./build-package.sh -a aarch64 pbox
+./scripts/run-docker.sh ./build-package.sh -a arm pbox
 ```
 
 ## 依赖
 
-- **libspdlog**：日志组件
-- **libcurl**：HTTP 下载镜像元数据
-- **libarchive**：解压 tar.xz rootfs 压缩包
-- **libproot.so**：proot 核心动态库（arm32 架构预编译，位于 lib/ 目录）
+- **libspdlog**：日志组件（Termux 系统包）
+- **libcurl**：HTTP 下载镜像（Termux 系统包）
+- **proot**：**自带**，打包在 deb 内（`opt/Pbox/bin/proot`）
+- **libtalloc**：**自带**，打包在 deb 内（`opt/Pbox/lib/libtalloc.so`）
+
+## GitHub Actions
+
+CI 使用 termux-packages Docker 环境构建：
+
+| Job | 架构 | 产物 |
+|-----|------|------|
+| build-aarch64 | arm64 | `pbox-aarch64.deb` |
+| build-arm | arm32 | `pbox-arm.deb` |
+
+每个 deb 包内含：
+- `opt/Pbox/pbox` — 主程序
+- `opt/Pbox/bin/proot` — 自带 proot 二进制
+- `opt/Pbox/lib/` — 共享库（libinitialization.so、libtalloc.so 等）
+- `bin/pbox` — 启动脚本
 
 ## 项目结构
 
 ```
 Pbox/
 ├── include/          # 头文件
-│   ├── Cli_menu.h        # 命令行解析与业务逻辑
-│   ├── call_so.h         # 动态库加载工具
-│   ├── container_config.h # 容器配置管理
-│   ├── download_rootfs.hpp # rootfs 下载与解压
-│   ├── image_db.h        # 镜像数据库
-│   ├── initialization.h  # proot 启动器
-│   └── write_log.h       # 日志系统
 ├── src/              # 源代码
-│   ├── Cli_menu.cpp      # 命令行解析与业务逻辑实现
-│   ├── call_so.cpp       # 动态库加载工具实现
-│   ├── container_config.cpp # 容器配置管理实现
-│   ├── download_rootfs.cpp # rootfs 下载与解压实现
-│   ├── image_db.cpp      # 镜像数据库实现（JSON 解析）
-│   ├── initialization.cpp # proot 启动器实现
-│   ├── main.cpp          # 程序入口，镜像元数据缓存
-│   └── write_log.cpp     # 日志系统实现
-├── lib/              # 预编译动态库
-│   └── libproot.so       # proot 核心库（arm32）
-├── res/              # 资源文件
-├── build.sh          # termux-packages 构建脚本
+├── bin/              # 预编译 proot（可选，CI 自动打包）
+├── scripts/          # 构建/测试脚本
+├── .github/workflows/
+│   └── ci.yml        # termux-packages CI 构建
+├── build.sh          # termux-packages 包脚本
 ├── CMakeLists.txt    # CMake 构建配置
 └── README.md
 ```
 
-## 技术说明
-
-- rootfs 解压时跳过 tar 内的符号链接、设备文件、FIFO，避免 Android 权限崩溃
-- 解压后自动补全 usrmerge 根目录软链接（/bin /lib /sbin）和动态链接器
-- armhf 架构下 ld-linux-armhf.so.3 为实体文件，不创建覆盖软链接
-- proot 启动参数：--link2symlink --kill-on-exit --sysvipc -0，绑定 /dev /proc /sys
-
 ## 许可证
 
-Pbox 基于 **GPL-3.0-or-later** 许可证发布，详情请参阅 `COPYING` 文件。
+Pbox 基于 **GPL-3.0-or-later** 许可证发布。
 
-### 第三方组件
-
-- **libproot.so**：预编译版本（非 Termux 官方仓库提供），GPL-2.0-or-later
-- **spdlog**、**libcurl**、**libarchive**、**nlohmann-json**：依赖 Termux 系统包
-
-完整的第三方版权信息请参阅 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
+proot 为 GPL-2.0-or-later，完整版权信息见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。

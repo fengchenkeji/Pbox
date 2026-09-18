@@ -13,41 +13,18 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Os -Wall -fvisibility=hidden")
 # 使用预编译的 spdlog 共享库，避免头文件模板膨胀
 add_compile_definitions(SPDLOG_COMPILED_LIB SPDLOG_FMT_EXTERNAL)
 
-# 架构识别，定义对应文件列表
+# 架构识别
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "^aarch64|arm64")
-    set(PBOX_ABI_DIR "arm64‑v8a")
-    set(SO_FILES
-        libproot.so
-        libproot-loader.so
-        libproot-loader32.so
-        libtalloc.so.2
-    )
+    set(PBOX_ABI_DIR "arm64-v8a")
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^x86_64|amd64|x64")
-    # Linux x86_64 测试构建：libproot.so 由本机 gcc 编译为 ET_DYN 共享对象，
-    # talloc 使用系统库（/usr/lib/x86_64-linux-gnu/libtalloc.so.2），无需 loader。
     set(PBOX_ABI_DIR "x86_64")
-    set(SO_FILES
-        libproot.so
-    )
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^arm")
-    set(PBOX_ABI_DIR "armeabi‑v7a")
-    set(SO_FILES
-        libproot.so
-        libproot-loader.so
-        libtalloc.so.2
-    )
+    set(PBOX_ABI_DIR "armeabi-v7a")
 else()
-    message(WARNING "Unknown arch, fallback to armeabi‑v7a")
-    set(PBOX_ABI_DIR "armeabi‑v7a")
-    set(SO_FILES
-        libproot.so
-        libproot-loader.so
-        libtalloc.so.2
-    )
+    set(PBOX_ABI_DIR "armeabi-v7a")
 endif()
 
 message(STATUS "PBOX target ABI dir: ${PBOX_ABI_DIR}")
-message(STATUS "Files to copy: ${SO_FILES}")
 
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
@@ -72,12 +49,15 @@ else()
     set(CURL_LIB CURL::libcurl)
 endif()
 
+# libinitialization.so: proot 启动器模块
+# 内部通过 fork+exec 调用 proot 可执行文件，不再 dlopen libproot.so
 add_library(initialization SHARED
     src/initialization.cpp
     src/container_config.cpp
 )
 target_link_libraries(initialization PRIVATE dl ${SPDLOG_LIB})
 
+# 主程序
 add_executable(main
     src/main.cpp
     src/Cli_menu.cpp
@@ -92,8 +72,7 @@ target_link_libraries(main PRIVATE
     ${SPDLOG_LIB}
     ${CURL_LIB}
 )
-# 强制导出主程序所有符号，供 libproot.so 通过 dlsym 查找 main
-target_link_options(main PRIVATE -Wl,--export-dynamic -Wl,-E)
+# proot 已改为 fork+exec 调用，不再需要导出主程序符号给 libproot.so
 set_target_properties(main PROPERTIES
     BUILD_RPATH "${CMAKE_BINARY_DIR}/lib"
     INSTALL_RPATH "${TERMUX_PREFIX}/opt/Pbox/lib"
@@ -106,18 +85,20 @@ add_custom_command(TARGET main POST_BUILD
     COMMENT "Sync res folder to build dir"
 )
 
-# 预编译so文件复制：使用 add_custom_target 确保每次构建都执行
-set(PBOX_SO_ROOT "${PROJECT_SOURCE_DIR}/lib/${PBOX_ABI_DIR}")
-message(STATUS "Prebuilt so root dir: ${PBOX_SO_ROOT}")
-
-add_custom_target(copy_prebuilt_so ALL
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/lib
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${PBOX_SO_ROOT} ${CMAKE_BINARY_DIR}/lib
-    COMMENT "Copy all prebuilt so files from ${PBOX_ABI_DIR} to build/lib"
+# 复制自带 proot 可执行文件（如果存在）
+# 优先从 bin/ 目录复制；如果不存在，运行时将使用系统安装的 proot
+set(PBOX_BIN_SRC "${PROJECT_SOURCE_DIR}/bin/${PBOX_ABI_DIR}")
+add_custom_target(copy_proot_bin ALL
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/bin
+    COMMAND ${CMAKE_COMMAND} -E echo "Looking for proot binary in ${PBOX_BIN_SRC}"
+    COMMAND if(EXISTS "${PBOX_BIN_SRC}/proot")
+        ${CMAKE_COMMAND} -E copy "${PBOX_BIN_SRC}/proot" ${CMAKE_BINARY_DIR}/bin/proot
+    else()
+        ${CMAKE_COMMAND} -E echo "No bundled proot binary found, will use system proot at runtime"
+    endif()
+    COMMENT "Copy bundled proot binary (if present)"
 )
-
-# 主程序依赖 so 复制目标
-add_dependencies(main copy_prebuilt_so)
+add_dependencies(main copy_proot_bin)
 
 # 编译后自动 strip，去除调试符号，大幅减小体积
 if(CMAKE_STRIP)

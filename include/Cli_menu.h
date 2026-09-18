@@ -28,7 +28,8 @@ enum class SubCmdType
     Help,
     List,
     Install,
-    Login
+    Login,
+    ProotVersion
 };
 
 struct CliParseResult

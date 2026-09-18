@@ -40,6 +40,7 @@ void print_help()
     std::cout << "  pbox list                                    列出所有系统\n";
     std::cout << "  pbox list ubuntu                             列出ubuntu所有版本\n";
     std::cout << "  pbox login ubuntu:jammy                      进入已安装容器\n";
+    std::cout << "  pbox proot-version                           查看 proot 版本号\n";
     std::cout << "  pbox -h / --help                             显示本帮助\n";
 }
 
@@ -72,6 +73,10 @@ CliParseResult parse_cli(int argc, char* argv[])
         {
             res.cmd = SubCmdType::Login;
             if (i + 1 < argc) res.install_arg = argv[++i];
+        }
+        else if (arg == "proot-version" || arg == "version")
+        {
+            res.cmd = SubCmdType::ProotVersion;
         }
     }
     return res;
@@ -153,6 +158,18 @@ int execute_command(const CliParseResult& res, ImageDb& db, const std::string& e
     auto logger = get_console_logger();
 
     if (res.cmd == SubCmdType::Help) { print_help(); return 0; }
+
+    if (res.cmd == SubCmdType::ProotVersion)
+    {
+        const char* ver = get_proot_version(exe_dir.c_str(), res.debug);
+        if (ver && *ver)
+        {
+            std::cout << ver << '\n';
+            return 0;
+        }
+        std::cerr << "[错误] 无法获取 proot 版本，请确认 proot 已安装\n";
+        return 1;
+    }
 
     if (res.cmd == SubCmdType::List)
     {
@@ -293,8 +310,8 @@ int start_proot(const std::string& rootfs_path,
     }
 
     int ret = run_proot(exe_dir.c_str(), rootfs_path.c_str(), logger, debug);
-    if (ret == -1) std::cerr << "[错误] libproot.so加载失败\n";
-    else if (ret == -2) std::cerr << "[错误] 未找到proot main符号\n";
+    if (ret == -1) std::cerr << "[错误] 未找到 proot 可执行文件，请安装 proot 包\n";
+    else if (ret == -2) std::cerr << "[错误] fork 子进程失败\n";
 
     close_lib_handle(handle);
     return ret;

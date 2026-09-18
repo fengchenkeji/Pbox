@@ -23,19 +23,29 @@ extern "C" {
 #endif
 
 /**
- * 启动 proot 容器（基于 bash 启动脚本逻辑）
- * 内部加载配置、构建参数、dlopen libproot.so 并调用 main
+ * 启动 proot 容器（直接调用 proot 可执行文件，fork+exec 隔离）
+ * 内部加载配置、构建参数，fork 子进程执行 proot 二进制
  *
  * @param exe_dir      程序运行目录
  * @param rootfs_path  rootfs 根目录绝对路径
- * @param logger       日志对象（由主程序传入，so 内部不调用 get_console_logger）
+ * @param logger       日志对象（由主程序传入）
  * @param debug        是否打印调试日志
- * @return -1 dlopen libproot.so 失败; -2 dlsym main 失败; >=0 proot退出码
+ * @return >=0 proot退出码; -1 proot 可执行文件未找到; -2 fork 失败
  */
 int run_proot(const char* exe_dir,
               const char* rootfs_path,
               LoggerPtr logger,
               bool debug);
+
+/**
+ * 获取 proot 版本号
+ * 通过执行 proot --version 并解析输出来获取
+ *
+ * @param exe_dir  程序运行目录（用于查找自带 bin/proot）
+ * @param debug    是否打印调试日志
+ * @return 版本字符串（如 "5.4.0"），失败返回空字符串
+ */
+const char* get_proot_version(const char* exe_dir, bool debug);
 
 #ifdef __cplusplus
 }
