@@ -85,12 +85,10 @@ add_custom_command(TARGET main POST_BUILD
     COMMENT "Sync res folder to build dir"
 )
 
-# 复制自带 proot 可执行文件（如果存在）
-set(PBOX_BIN_SRC "${PROJECT_SOURCE_DIR}/bin/${PBOX_ABI_DIR}")
+# 创建 build/bin 目录（proot 二进制在打包阶段复制）
 add_custom_target(copy_proot_bin ALL
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/bin
-    COMMAND sh -c "if [ -f '${PBOX_BIN_SRC}/proot' ]; then cp '${PBOX_BIN_SRC}/proot' '${CMAKE_BINARY_DIR}/bin/proot'; echo 'Copied bundled proot'; else echo 'No bundled proot binary, will use system proot'; fi"
-    COMMENT "Copy bundled proot binary (if present)"
+    COMMENT "Create build/bin directory"
 )
 add_dependencies(main copy_proot_bin)
 
