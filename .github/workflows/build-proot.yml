@@ -67,22 +67,40 @@ jobs:
           REPO_ARCH="${{ matrix.arch }}"
           REPO="https://packages.termux.dev/apt/termux-main"
           curl -fL "${REPO}/dists/stable/main/binary-${REPO_ARCH}/Packages" -o /tmp/Packages
+
+          # 查找所有 talloc 相关包
+          echo "=== Available talloc packages ==="
+          grep "^Package:.*talloc" /tmp/Packages
+
+          # 下载 libtalloc 运行时
           TALLOC_DEB=$(grep -A20 "^Package: libtalloc$" /tmp/Packages | grep "^Filename:" | head -1 | awk '{print $2}')
           echo "libtalloc deb: ${TALLOC_DEB}"
           curl -fL "${REPO}/${TALLOC_DEB}" -o /tmp/libtalloc.deb
           mkdir -p /tmp/talloc
           dpkg-deb -x /tmp/libtalloc.deb /tmp/talloc
           find /tmp/talloc -name "libtalloc*"
-          # Extract headers
-          TALLOC_DEV_DEB=$(grep -A20 "^Package: libtalloc-dev$" /tmp/Packages | grep "^Filename:" | head -1 | awk '{print $2}')
+
+          # 下载 talloc 开发头文件（包名可能是 talloc-dev 或 libtalloc-dev）
+          TALLOC_DEV_DEB=$(grep -A20 "^Package: talloc-dev$" /tmp/Packages | grep "^Filename:" | head -1 | awk '{print $2}')
+          if [ -z "$TALLOC_DEV_DEB" ]; then
+            TALLOC_DEV_DEB=$(grep -A20 "^Package: libtalloc-dev$" /tmp/Packages | grep "^Filename:" | head -1 | awk '{print $2}')
+          fi
           if [ -n "$TALLOC_DEV_DEB" ]; then
+            echo "talloc dev deb: ${TALLOC_DEV_DEB}"
             curl -fL "${REPO}/${TALLOC_DEV_DEB}" -o /tmp/libtalloc-dev.deb
             mkdir -p /tmp/talloc-dev
             dpkg-deb -x /tmp/libtalloc-dev.deb /tmp/talloc-dev
             find /tmp/talloc-dev -name "talloc.h"
+            TALLOC_INC_PATH=$(find /tmp/talloc-dev -name "talloc.h" -exec dirname {} \; | head -1)
+          else
+            echo "WARN: no talloc-dev package found, searching in libtalloc runtime"
+            TALLOC_INC_PATH=$(find /tmp/talloc -name "talloc.h" -exec dirname {} \; | head -1)
           fi
+
           echo "TALLOC_LIB=/tmp/talloc/data/data/com.termux/files/usr/lib" >> $GITHUB_ENV
-          echo "TALLOC_INC=/tmp/talloc-dev/data/data/com.termux/files/usr/include" >> $GITHUB_ENV
+          echo "TALLOC_INC=${TALLOC_INC_PATH}" >> $GITHUB_ENV
+          echo "TALLOC_INC=${TALLOC_INC_PATH}"
+          ls -la "${TALLOC_INC_PATH}/talloc.h"
 
       - name: Clone and build proot
         run: |
