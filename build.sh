@@ -5,6 +5,7 @@ TERMUX_PKG_LICENSE_FILE="COPYING"
 TERMUX_PKG_MAINTAINER="fengchenkeji <399233159@qq.com>"
 TERMUX_PKG_VERSION=0.0.2
 TERMUX_PKG_DEPENDS="libspdlog, libcurl"
+TERMUX_PKG_BUILD_DEPENDS="cmake, clang, make, ninja"
 TERMUX_PKG_BUILD_IN_SRC=true
 
 # 从 termux 仓库下载指定包的 .deb 并解压到目标目录
