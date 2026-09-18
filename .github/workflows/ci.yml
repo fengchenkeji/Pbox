@@ -39,7 +39,6 @@ jobs:
         run: |
           cd termux-packages
           ./scripts/run-docker.sh ./build-package.sh -a ${{ matrix.arch }} pbox
-        timeout-minutes: 40
 
       - name: Collect .deb artifact
         run: |
