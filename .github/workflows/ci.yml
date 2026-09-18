@@ -31,17 +31,15 @@ jobs:
       - name: Setup Pbox package in termux-packages
         run: |
           mkdir -p termux-packages/packages/pbox
-          # 复制 Pbox 全部源码到包目录
           cp -r Pbox/* termux-packages/packages/pbox/
-          # build.sh 作为 term-packages 包脚本
           cp Pbox/build.sh termux-packages/packages/pbox/build.sh
           ls -la termux-packages/packages/pbox/
 
       - name: Build pbox package (Docker)
         run: |
           cd termux-packages
-          # 使用 termux-packages 官方 Docker 构建环境
-          ./scripts/run-docker.sh ./build-package.sh -a ${{ matrix.arch }} pbox 2>&1 | tail -100
+          ./scripts/run-docker.sh ./build-package.sh -a ${{ matrix.arch }} pbox
+        timeout-minutes: 40
 
       - name: Collect .deb artifact
         run: |
