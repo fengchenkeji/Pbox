@@ -56,10 +56,7 @@ jobs:
           REPO="https://packages.termux.dev/apt/termux-main"
           ARCH="${{ matrix.repo_arch }}"
           curl -fL "${REPO}/dists/stable/main/binary-${ARCH}/Packages" -o /tmp/Packages
-
           mkdir -p /tmp/deps/extract /tmp/proot-extract
-
-          # 下载运行时依赖
           for pkg in libspdlog libcurl libtalloc; do
             DEB_PATH=$(grep -A30 "^Package: ${pkg}$" /tmp/Packages | grep "^Filename:" | head -1 | awk '{print $2}')
             if [ -n "$DEB_PATH" ]; then
@@ -68,25 +65,14 @@ jobs:
               echo "OK: $pkg"
             fi
           done
-
-          # 下载 proot
           PROOT_DEB=$(grep -A30 "^Package: proot$" /tmp/Packages | grep "^Filename:" | head -1 | awk '{print $2}')
           curl -fL "${REPO}/${PROOT_DEB}" -o /tmp/deps/proot.deb
           dpkg-deb -x /tmp/deps/proot.deb /tmp/proot-extract
           echo "OK: proot"
-
-          # 整理依赖库
           mkdir -p /tmp/deps/lib /tmp/deps/include
-          LIB_DIR="/tmp/deps/extract/data/data/com.termux/files/usr/lib"
-          INC_DIR="/tmp/deps/extract/data/data/com.termux/files/usr/include"
-          cp -a "$LIB_DIR/"*.so* /tmp/deps/lib/ 2>/dev/null || true
-          cp -a "$INC_DIR/"* /tmp/deps/include/ 2>/dev/null || true
-
-          echo "=== deps lib ==="
+          cp -a /tmp/deps/extract/data/data/com.termux/files/usr/lib/*.so* /tmp/deps/lib/ 2>/dev/null || true
+          cp -a /tmp/deps/extract/data/data/com.termux/files/usr/include/* /tmp/deps/include/ 2>/dev/null || true
           ls /tmp/deps/lib/ | head -20
-          echo "=== proot ==="
-          find /tmp/proot-extract -name proot -type f
-
           echo "DEPS_ROOT=/tmp/deps" >> $GITHUB_ENV
 
       - name: Build Pbox
@@ -100,7 +86,6 @@ jobs:
             -DPBOX_DEPS_ROOT="$DEPS_ROOT" \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CXX_FLAGS="-Os -Wall"
-
           make -C build -j$(nproc) VERBOSE=1
           file build/main
           file build/lib/*.so
@@ -109,47 +94,21 @@ jobs:
         run: |
           PKG_ROOT=/tmp/pbox-deb
           rm -rf "$PKG_ROOT"
-          mkdir -p "$PKG_ROOT/DEBIAN"
           PBOX_HOME="$PKG_ROOT/data/data/com.termux/files/usr/opt/Pbox"
-          mkdir -p "$PBOX_HOME/lib" "$PBOX_HOME/bin" "$PBOX_HOME/res"
+          mkdir -p "$PKG_ROOT/DEBIAN" "$PBOX_HOME/lib" "$PBOX_HOME/bin" "$PBOX_HOME/res"
           mkdir -p "$PKG_ROOT/data/data/com.termux/files/usr/bin"
           mkdir -p "$PKG_ROOT/data/data/com.termux/files/usr/share/doc/pbox"
-
-          # 主程序和自带 so
           cp build/main "$PBOX_HOME/pbox"
           chmod +x "$PBOX_HOME/pbox"
           cp build/lib/*.so "$PBOX_HOME/lib/" 2>/dev/null || true
-
-          # 自带 proot
           PROOT_BIN=$(find /tmp/proot-extract -name proot -type f | head -1)
           cp "$PROOT_BIN" "$PBOX_HOME/bin/proot"
           chmod +x "$PBOX_HOME/bin/proot"
-
-          # 运行时依赖库
           cp -a /tmp/deps/lib/*.so* "$PBOX_HOME/lib/" 2>/dev/null || true
-
-          # 资源
           cp -r res/* "$PBOX_HOME/res/" 2>/dev/null || true
-
-          # 启动脚本
-          cat > "$PKG_ROOT/data/data/com.termux/files/usr/bin/pbox" << 'EOF'
-#!/data/data/com.termux/files/usr/bin/sh
-export LD_LIBRARY_PATH="${PREFIX}/opt/Pbox/lib:${LD_LIBRARY_PATH}"
-exec "${PREFIX}/opt/Pbox/pbox" "$@"
-EOF
+          printf '#!/data/data/com.termux/files/usr/bin/sh\nexport LD_LIBRARY_PATH="${PREFIX}/opt/Pbox/lib:${LD_LIBRARY_PATH}"\nexec "${PREFIX}/opt/Pbox/pbox" "$@"\n' > "$PKG_ROOT/data/data/com.termux/files/usr/bin/pbox"
           chmod +x "$PKG_ROOT/data/data/com.termux/files/usr/bin/pbox"
-
-          # control
-          cat > "$PKG_ROOT/DEBIAN/control" << EOF
-Package: pbox
-Version: 0.0.2
-Architecture: ${{ matrix.repo_arch }}
-Maintainer: fengchenkeji <399233159@qq.com>
-Depends: libspdlog, libcurl
-Homepage: https://github.com/fengchenkeji/Pbox
-Description: A proot container management tool for Termux
-EOF
-
+          printf 'Package: pbox\nVersion: 0.0.2\nArchitecture: %s\nMaintainer: fengchenkeji <399233159@qq.com>\nDepends: libspdlog, libcurl\nHomepage: https://github.com/fengchenkeji/Pbox\nDescription: A proot container management tool for Termux\n' "${{ matrix.repo_arch }}" > "$PKG_ROOT/DEBIAN/control"
           DEB_NAME="pbox_0.0.2_${{ matrix.repo_arch }}.deb"
           dpkg-deb --build "$PKG_ROOT" "/tmp/${DEB_NAME}"
           echo "=== Contents ==="
