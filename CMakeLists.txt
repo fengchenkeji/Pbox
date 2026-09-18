@@ -86,16 +86,10 @@ add_custom_command(TARGET main POST_BUILD
 )
 
 # 复制自带 proot 可执行文件（如果存在）
-# 优先从 bin/ 目录复制；如果不存在，运行时将使用系统安装的 proot
 set(PBOX_BIN_SRC "${PROJECT_SOURCE_DIR}/bin/${PBOX_ABI_DIR}")
 add_custom_target(copy_proot_bin ALL
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/bin
-    COMMAND ${CMAKE_COMMAND} -E echo "Looking for proot binary in ${PBOX_BIN_SRC}"
-    COMMAND if(EXISTS "${PBOX_BIN_SRC}/proot")
-        ${CMAKE_COMMAND} -E copy "${PBOX_BIN_SRC}/proot" ${CMAKE_BINARY_DIR}/bin/proot
-    else()
-        ${CMAKE_COMMAND} -E echo "No bundled proot binary found, will use system proot at runtime"
-    endif()
+    COMMAND sh -c "if [ -f '${PBOX_BIN_SRC}/proot' ]; then cp '${PBOX_BIN_SRC}/proot' '${CMAKE_BINARY_DIR}/bin/proot'; echo 'Copied bundled proot'; else echo 'No bundled proot binary, will use system proot'; fi"
     COMMENT "Copy bundled proot binary (if present)"
 )
 add_dependencies(main copy_proot_bin)

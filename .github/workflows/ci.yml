@@ -57,7 +57,7 @@ jobs:
           ARCH="${{ matrix.repo_arch }}"
           curl -fL "${REPO}/dists/stable/main/binary-${ARCH}/Packages" -o /tmp/Packages
           mkdir -p /tmp/deps/extract /tmp/proot-extract
-          for pkg in libspdlog libcurl libtalloc; do
+          for pkg in libspdlog libcurl libtalloc fmt; do
             DEB_PATH=$(grep -A30 "^Package: ${pkg}$" /tmp/Packages | grep "^Filename:" | head -1 | awk '{print $2}')
             if [ -n "$DEB_PATH" ]; then
               curl -fL "${REPO}/${DEB_PATH}" -o "/tmp/deps/${pkg}.deb"
