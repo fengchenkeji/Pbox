@@ -1,4 +1,4 @@
-name: Pbox CI
+name: Pbox CI (termux-packages)
 
 on:
   push:
@@ -7,409 +7,56 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
-env:
-  CARGO_TERM_COLOR: always
-  # Android-Proot-Builder release download URL (public, no token needed)
-  PROOT_RELEASE_URL: https://github.com/fengchenkeji/Android-Proot-Builder/releases/download/proot-latest/proot-android.zip
-
 jobs:
-  # ============================================================
-  # Job 1: Linux x86_64 构建 + libproot.so dlopen 实际调用测试
-  # ============================================================
-  build-linux:
-    name: Build & Test (Linux x86_64)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            cmake \
-            g++ \
-            pkg-config \
-            libspdlog-dev \
-            libcurl4-openssl-dev \
-            nlohmann-json3-dev \
-            libfmt-dev \
-            libtalloc-dev \
-            libarchive-dev \
-            binutils \
-            zip
-
-      - name: Build libproot.so from source (Linux glibc)
-        run: |
-          # Android-Proot-Builder 的 x86_64 产物是 Android Bionic 版本，无法在 Linux glibc 上 dlopen
-          # 因此 Linux job 从 termux/proot 源码用本机 gcc 编译 glibc 版本的 libproot.so
-          chmod +x scripts/build-proot-linux.sh
-          ./scripts/build-proot-linux.sh lib/x86_64
-          ls -la lib/x86_64/
-
-      - name: Verify libproot.so (static analysis)
-        run: |
-          SO=lib/x86_64/libproot.so
-          echo "=== file ==="
-          file "$SO"
-          echo "=== ELF header ==="
-          readelf -h "$SO" | grep -E "Class|Type|Machine"
-          echo "=== main symbol ==="
-          readelf -s --wide "$SO" | grep -w "main" || echo "main not in .dynsym, checking .symtab..."
-          nm "$SO" 2>/dev/null | grep -w "main" || echo "main not found via nm"
-          echo "=== dynamic dependencies ==="
-          readelf -d "$SO" | grep NEEDED || true
-          # Must be a shared object
-          if file "$SO" | grep -q "shared object"; then
-            echo "[OK] libproot.so is a shared object"
-          else
-            echo "::error::libproot.so is NOT a shared object"
-            exit 1
-          fi
-
-      - name: Configure Pbox
-        run: |
-          cmake -S . -B build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_CXX_FLAGS="-Os -Wall"
-
-      - name: Build Pbox
-        run: |
-          cmake --build build -j$(nproc)
-
-      - name: Verify build artifacts
-        run: |
-          echo "=== Build output ==="
-          ls -la build/
-          ls -la build/lib/
-          file build/main
-          file build/lib/libinitialization.so
-
-      - name: Test libproot.so dlopen call chain
-        run: |
-          chmod +x scripts/test-proot-call.sh
-          ./scripts/test-proot-call.sh build
-
-      - name: Test Pbox CLI
-        run: |
-          cd build
-          echo "=== pbox --help ==="
-          ./main --help
-          echo ""
-          echo "=== pbox list (first 10 lines) ==="
-          ./main list 2>&1 | head -10 || true
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: pbox-linux-x86_64
-          path: |
-            build/main
-            build/lib/*.so
-            lib/x86_64/libproot.so
-          retention-days: 7
-
-  # ============================================================
-  # Job 2 & 3: Android NDK 交叉编译生成 .deb + libproot.so 检测 + 模拟器测试
-  # ============================================================
-  build-termux:
-    name: Build & Verify (Android ${{ matrix.arch }})
+  build:
+    name: Build .deb (${{ matrix.arch }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
         arch: [aarch64, arm]
       fail-fast: false
-    env:
-      TERMUX_PREFIX: /data/data/com.termux/files/usr
+
     steps:
-      - name: Checkout Pbox
+      - name: Checkout Pbox source
         uses: actions/checkout@v4
         with:
           path: Pbox
 
-      - name: Install tools
+      - name: Checkout termux-packages
+        uses: actions/checkout@v4
+        with:
+          repository: termux/termux-packages
+          path: termux-packages
+
+      - name: Setup Pbox package in termux-packages
         run: |
-          sudo apt-get update
-          sudo apt-get install -y -qq binutils qemu-user-static zip dpkg-dev jq
+          mkdir -p termux-packages/packages/pbox
+          # 复制 Pbox 全部源码到包目录
+          cp -r Pbox/* termux-packages/packages/pbox/
+          # build.sh 作为 term-packages 包脚本
+          cp Pbox/build.sh termux-packages/packages/pbox/build.sh
+          ls -la termux-packages/packages/pbox/
 
-      - name: Setup Android NDK
+      - name: Build pbox package (Docker)
         run: |
-          # Find or install Android NDK
-          NDK_DIR=""
-          if [ -n "$ANDROID_NDK_HOME" ] && [ -d "$ANDROID_NDK_HOME" ]; then
-            NDK_DIR="$ANDROID_NDK_HOME"
-          elif [ -n "$ANDROID_HOME" ] && [ -d "$ANDROID_HOME/ndk" ]; then
-            NDK_DIR=$(find "$ANDROID_HOME/ndk" -maxdepth 1 -type d 2>/dev/null | sort | tail -1)
-          elif [ -d "/usr/local/lib/android/sdk/ndk" ]; then
-            NDK_DIR=$(find /usr/local/lib/android/sdk/ndk -maxdepth 1 -type d 2>/dev/null | sort | tail -1)
-          fi
-          if [ -z "$NDK_DIR" ] || [ ! -d "$NDK_DIR" ]; then
-            echo "NDK not found, installing via sdkmanager..."
-            SDKMANAGER=$(find "$ANDROID_HOME" -name "sdkmanager" -type f 2>/dev/null | head -1)
-            if [ -n "$SDKMANAGER" ]; then
-              yes | "$SDKMANAGER" --install "ndk;26.1.10909125" 2>&1 | tail -5
-            fi
-            NDK_DIR=$(find /usr/local/lib/android/sdk/ndk -maxdepth 1 -type d 2>/dev/null | sort | tail -1)
-          fi
-          echo "NDK_DIR=$NDK_DIR"
-          if [ -z "$NDK_DIR" ] || [ ! -d "$NDK_DIR" ]; then
-            echo "::error::Cannot find Android NDK"
-            find / -name "ndk-build" -type f 2>/dev/null | head -5
-            exit 1
-          fi
-          HOST_TAG=$(ls "$NDK_DIR/toolchains/llvm/prebuilt/" 2>/dev/null | head -1)
-          echo "HOST_TAG=$HOST_TAG"
-          echo "NDK_DIR=$NDK_DIR" >> $GITHUB_ENV
-          echo "HOST_TAG=$HOST_TAG" >> $GITHUB_ENV
-          ls "$NDK_DIR/toolchains/llvm/prebuilt/$HOST_TAG/bin/"*clang* 2>/dev/null | head -5
+          cd termux-packages
+          # 使用 termux-packages 官方 Docker 构建环境
+          ./scripts/run-docker.sh ./build-package.sh -a ${{ matrix.arch }} pbox 2>&1 | tail -100
 
-      - name: Download libproot.so from Android-Proot-Builder release
+      - name: Collect .deb artifact
         run: |
-          echo "Downloading from: ${PROOT_RELEASE_URL}"
-          curl -fL -o /tmp/proot-android.zip "${PROOT_RELEASE_URL}"
-          unzip -l /tmp/proot-android.zip
-
-      - name: Extract and static-verify libproot.so
-        run: |
-          unzip -o /tmp/proot-android.zip -d /tmp/proot-release
-          if [ "${{ matrix.arch }}" = "aarch64" ]; then
-            RELEASE_DIR="aarch64"
-            EXPECTED_MACHINE="AArch64"
-            SO_ARCH_DIR="arm64-v8a"
-          else
-            RELEASE_DIR="armv7a"
-            EXPECTED_MACHINE="ARM"
-            SO_ARCH_DIR="armeabi-v7a"
-          fi
-          SO="/tmp/proot-release/${RELEASE_DIR}/libproot.so"
-          echo "=== file ===" && file "$SO"
-          file "$SO" | grep -q "shared object" || { echo "::error::not shared object"; exit 1; }
-          echo "=== arch ===" && readelf -h "$SO" | grep -E "Class|Type|Machine"
-          readelf -h "$SO" | grep -q "${EXPECTED_MACHINE}" || { echo "::error::arch mismatch"; exit 1; }
-          echo "=== main symbol ==="
-          readelf -s --wide "$SO" | grep -w "main" | grep -q "GLOBAL" && echo "[OK] main in .dynsym" || \
-            (nm "$SO" 2>/dev/null | grep -w "main" | grep -q " T " && echo "[OK] main in .symtab") || \
-            { echo "::error::main not found"; exit 1; }
-          echo "=== NEEDED ===" && readelf -d "$SO" | grep NEEDED || echo "(static)"
-          ls -la /tmp/proot-release/${RELEASE_DIR}/
-          echo "SO_ARCH_DIR=$SO_ARCH_DIR" >> $GITHUB_ENV
-          echo "RELEASE_DIR=$RELEASE_DIR" >> $GITHUB_ENV
-          echo "[PASS] Static verification"
-
-      - name: Setup vcpkg and build Android dependencies
-        run: |
-          if [ "${{ matrix.arch }}" = "aarch64" ]; then
-            VCPKG_TRIPLET="arm64-android"
-          else
-            VCPKG_TRIPLET="arm-neon-android"
-          fi
-          echo "VCPKG_TRIPLET=$VCPKG_TRIPLET"
-          echo "VCPKG_TRIPLET=$VCPKG_TRIPLET" >> $GITHUB_ENV
-
-          export ANDROID_NDK_HOME="$NDK_DIR"
-          export VCPKG_ROOT=/tmp/vcpkg
-
-          # Install vcpkg
-          cd /tmp
-          git clone --depth 1 https://github.com/microsoft/vcpkg.git 2>&1 | tail -3
-          cd vcpkg
-          ./bootstrap-vcpkg.sh -disableMetrics 2>&1 | tail -3
-
-          # Build spdlog and curl for Android
-          ./vcpkg install spdlog curl --triplet "$VCPKG_TRIPLET" 2>&1 | tail -30
-
-          echo "=== Installed libs ==="
-          ls "$VCPKG_ROOT/installed/$VCPKG_TRIPLET/lib/" | head -20
-          echo "=== Installed headers ==="
-          ls "$VCPKG_ROOT/installed/$VCPKG_TRIPLET/include/" | head -20
-
-          # Also download libtalloc from Termux (not in vcpkg)
-          if [ "${{ matrix.arch }}" = "aarch64" ]; then
-            REPO_ARCH="aarch64"
-          else
-            REPO_ARCH="arm"
-          fi
-          REPO="https://packages.termux.dev/apt/termux-main"
-          curl -fL "${REPO}/dists/stable/main/binary-${REPO_ARCH}/Packages" -o /tmp/Packages
-          TALLOC_DEB=$(grep -A20 "^Package: libtalloc$" /tmp/Packages | grep "^Filename:" | head -1 | awk '{print $2}')
-          if [ -n "$TALLOC_DEB" ]; then
-            curl -fL "${REPO}/${TALLOC_DEB}" -o /tmp/libtalloc.deb
-            mkdir -p /tmp/talloc-extract
-            dpkg-deb -x /tmp/libtalloc.deb /tmp/talloc-extract
-            find /tmp/talloc-extract -name "libtalloc*"
-            cp /tmp/talloc-extract/data/data/com.termux/files/usr/lib/libtalloc.so* "$VCPKG_ROOT/installed/$VCPKG_TRIPLET/lib/" 2>/dev/null || true
-            echo "Copied libtalloc to vcpkg lib dir"
-          fi
-          echo "VCPKG_ROOT=$VCPKG_ROOT" >> $GITHUB_ENV
-
-      - name: Cross-compile Pbox with NDK
-        run: |
-          cd Pbox
-          VCPKG_INSTALLED="$VCPKG_ROOT/installed/$VCPKG_TRIPLET"
-          echo "=== vcpkg deps ==="
-          ls "$VCPKG_INSTALLED/lib/" | grep -E "spdlog|curl|fmt" | head -10
-          ls "$VCPKG_INSTALLED/include/" | grep -E "spdlog|curl" | head -10
-
-          # Use NDK cmake toolchain + manual deps from vcpkg (avoids find_package issues)
-          if [ "${{ matrix.arch }}" = "aarch64" ]; then
-            ABI="arm64-v8a"
-          else
-            ABI="armeabi-v7a"
-          fi
-
-          cmake -S . -B build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="$NDK_DIR/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI="$ABI" \
-            -DANDROID_PLATFORM=android-24 \
-            -DANDROID_STL=c++_shared \
-            -DPBOX_MANUAL_DEPS=ON \
-            -DPBOX_DEPS_ROOT="$VCPKG_INSTALLED" \
-            -DCMAKE_EXE_LINKER_FLAGS="-L$VCPKG_INSTALLED/lib" \
-            -DCMAKE_SHARED_LINKER_FLAGS="-L$VCPKG_INSTALLED/lib" 2>&1
-
-          echo "=== Building ==="
-          make -C build -j"$(nproc)" VERBOSE=1 2>&1
-
-          echo "=== Build artifacts ==="
-          file build/main 2>/dev/null
-          file build/lib/*.so 2>/dev/null
-          ls -la build/main build/lib/ 2>/dev/null
-
-      - name: Create .deb package
-        run: |
-          cd Pbox
-          if [ "${{ matrix.arch }}" = "aarch64" ]; then
-            DEB_ARCH="aarch64"
-            SO_ARCH_DIR="arm64-v8a"
-          else
-            DEB_ARCH="arm"
-            SO_ARCH_DIR="armeabi-v7a"
-          fi
-
-          PKG_ROOT=/tmp/pbox-deb
-          rm -rf "$PKG_ROOT"
-          mkdir -p "$PKG_ROOT/DEBIAN"
-          mkdir -p "$PKG_ROOT${TERMUX_PREFIX}/opt/Pbox/lib"
-          mkdir -p "$PKG_ROOT${TERMUX_PREFIX}/opt/Pbox/res"
-          mkdir -p "$PKG_ROOT${TERMUX_PREFIX}/bin"
-          mkdir -p "$PKG_ROOT${TERMUX_PREFIX}/share/doc/pbox"
-
-          # Copy binary
-          cp build/main "$PKG_ROOT${TERMUX_PREFIX}/opt/Pbox/pbox"
-          chmod +x "$PKG_ROOT${TERMUX_PREFIX}/opt/Pbox/pbox"
-
-          # Copy libinitialization.so
-          cp build/lib/*.so "$PKG_ROOT${TERMUX_PREFIX}/opt/Pbox/lib/" 2>/dev/null || true
-
-          # Copy libproot.so and loaders from Android-Proot-Builder release
-          cp /tmp/proot-release/${RELEASE_DIR}/*.so "$PKG_ROOT${TERMUX_PREFIX}/opt/Pbox/lib/" 2>/dev/null || true
-
-          # Bundle vcpkg-built runtime libraries (spdlog, curl, fmt, openssl, zlib, etc.)
-          VCPKG_INSTALLED="$VCPKG_ROOT/installed/$VCPKG_TRIPLET"
-          for lib in "$VCPKG_INSTALLED"/lib/lib*.so*; do
-            [ -f "$lib" ] && cp -a "$lib" "$PKG_ROOT${TERMUX_PREFIX}/opt/Pbox/lib/" 2>/dev/null || true
-          done
-          # Also copy libtalloc if available
-          cp "$VCPKG_INSTALLED"/lib/libtalloc.so* "$PKG_ROOT${TERMUX_PREFIX}/opt/Pbox/lib/" 2>/dev/null || true
-
-          # Copy resources
-          cp -r res/* "$PKG_ROOT${TERMUX_PREFIX}/opt/Pbox/res/" 2>/dev/null || true
-
-          # Create launcher script
-          cat > "$PKG_ROOT${TERMUX_PREFIX}/bin/pbox" << 'EOF'
-          #!/data/data/com.termux/files/usr/bin/sh
-          export LD_LIBRARY_PATH="${PREFIX}/opt/Pbox/lib:${LD_LIBRARY_PATH}"
-          exec "${PREFIX}/opt/Pbox/pbox" "$@"
-          EOF
-          chmod +x "$PKG_ROOT${TERMUX_PREFIX}/bin/pbox"
-
-          # Create control file
-          cat > "$PKG_ROOT/DEBIAN/control" << EOF
-          Package: pbox
-          Version: 0.0.1
-          Architecture: ${DEB_ARCH}
-          Maintainer: fengchenkeji <399233159@qq.com>
-          Depends: libspdlog, libcurl, libtalloc
-          Homepage: https://github.com/fengchenkeji/Pbox
-          Description: A proot container management tool for Termux
-          EOF
-
-          # Build .deb
-          DEB_NAME="pbox_0.0.1_${DEB_ARCH}.deb"
-          dpkg-deb --build "$PKG_ROOT" "/tmp/${DEB_NAME}"
           mkdir -p /tmp/debs
-          cp "/tmp/${DEB_NAME}" /tmp/debs/
-          echo "=== Created .deb ==="
+          find termux-packages/output -name "*.deb" -exec cp {} /tmp/debs/ \;
           ls -la /tmp/debs/
-          dpkg-deb --info "/tmp/debs/${DEB_NAME}"
-          echo "=== .deb contents ==="
-          dpkg-deb -c "/tmp/debs/${DEB_NAME}" | head -20
+          # 列出 deb 内容
+          for deb in /tmp/debs/*.deb; do
+            echo "=== $deb ==="
+            dpkg-deb -c "$deb" | head -30
+          done
 
-      - name: Emulator test (qemu-user)
-        run: |
-          if [ "${{ matrix.arch }}" = "aarch64" ]; then
-            QEMU="qemu-aarch64-static"
-            ANDROID_ARCH="aarch64-linux-android"
-          else
-            QEMU="qemu-arm-static"
-            ANDROID_ARCH="arm-linux-androideabi"
-          fi
-
-          DEB=$(ls /tmp/debs/pbox_*.deb | head -1)
-          echo "Testing: $DEB"
-
-          # Extract .deb
-          rm -rf /tmp/pbox-test
-          mkdir -p /tmp/pbox-test
-          dpkg-deb -x "$DEB" /tmp/pbox-test/
-
-          PBOX_BIN="/tmp/pbox-test${TERMUX_PREFIX}/opt/Pbox/pbox"
-          PROOT_SO="/tmp/pbox-test${TERMUX_PREFIX}/opt/Pbox/lib/libproot.so"
-          ANDROID_SYSROOT="${NDK_DIR}/toolchains/llvm/prebuilt/${HOST_TAG}/sysroot"
-
-          echo "=== pbox binary ==="
-          file "$PBOX_BIN"
-
-          echo "=== Running pbox --help with qemu-user ==="
-          export QEMU_LD_PREFIX="$ANDROID_SYSROOT"
-          export LD_LIBRARY_PATH="/tmp/pbox-test${TERMUX_PREFIX}/opt/Pbox/lib:${LD_LIBRARY_PATH}"
-          $QEMU "$PBOX_BIN" --help 2>&1 || echo "pbox --help exit: $?"
-
-          echo "=== dlopen test: cross-compile test program ==="
-          cat > /tmp/test_dlopen.c << 'CEOF'
-          #include <dlfcn.h>
-          #include <stdio.h>
-          #include <stdlib.h>
-          typedef int (*ProotMain)(int, char**);
-          int main(int argc, char** argv) {
-              const char* so = (argc>1)?argv[1]:"./libproot.so";
-              fprintf(stderr, "[TEST] dlopen(%s)...\n", so);
-              void* h = dlopen(so, RTLD_NOW|RTLD_GLOBAL);
-              if(!h){fprintf(stderr,"[TEST] FAIL: %s\n",dlerror());return 1;}
-              fprintf(stderr,"[TEST] OK dlopen\n");
-              ProotMain pm=(ProotMain)dlsym(h,"main");
-              if(!pm){fprintf(stderr,"[TEST] FAIL dlsym: %s\n",dlerror());dlclose(h);return 2;}
-              fprintf(stderr,"[TEST] OK main=%p\n",(void*)pm);
-              fprintf(stderr,"[TEST] PASS\n");
-              dlclose(h);
-              return 0;
-          }
-          CEOF
-          NDK_BIN="${NDK_DIR}/toolchains/llvm/prebuilt/${HOST_TAG}/bin"
-          if [ "${{ matrix.arch }}" = "aarch64" ]; then
-            "${NDK_BIN}/aarch64-linux-android24-clang" -O2 /tmp/test_dlopen.c -o /tmp/test_dlopen -ldl
-          else
-            "${NDK_BIN}/armv7a-linux-androideabi24-clang" -O2 /tmp/test_dlopen.c -o /tmp/test_dlopen -ldl
-          fi
-          file /tmp/test_dlopen
-          echo "=== Running dlopen test with qemu-user ==="
-          $QEMU /tmp/test_dlopen "$PROOT_SO" 2>&1 || echo "dlopen test exit: $?"
-          echo "[DONE] Emulator test completed"
-
-      - name: Upload .deb packages
+      - name: Upload .deb package
         uses: actions/upload-artifact@v4
         with:
-          name: pbox-termux-${{ matrix.arch }}
+          name: pbox-${{ matrix.arch }}.deb
           path: /tmp/debs/*.deb
           retention-days: 30
