@@ -28,6 +28,8 @@
 #include <string>
 #include <filesystem>
 #include <fstream>
+#include <cstdio>
+#include <unistd.h>
 #include <sys/utsname.h>
 
 namespace fs = std::filesystem;
@@ -161,11 +163,27 @@ int execute_command(const CliParseResult& res, ImageDb& db, const std::string& e
 
     if (res.cmd == SubCmdType::ProotVersion)
     {
-        const char* ver = get_proot_version(exe_dir.c_str(), res.debug);
-        if (ver && *ver)
+        // 直接执行 proot --version，不依赖 libinitialization.so
+        std::string proot_bin = exe_dir + "/bin/proot";
+        if (access(proot_bin.c_str(), X_OK) != 0) proot_bin = "proot";
+        std::string cmd = proot_bin + " --version 2>/dev/null";
+        FILE* fp = popen(cmd.c_str(), "r");
+        if (fp)
         {
-            std::cout << ver << '\n';
-            return 0;
+            char buf[256] = {0};
+            std::string out;
+            while (fgets(buf, sizeof(buf), fp)) out += buf;
+            pclose(fp);
+            size_t pos = out.find("version");
+            if (pos != std::string::npos)
+            {
+                pos += 7;
+                while (pos < out.size() && (out[pos]==' '||out[pos]=='\t')) pos++;
+                size_t end = pos;
+                while (end < out.size() && out[end]!='\n'&&out[end]!='\r'&&out[end]!=' ') end++;
+                std::cout << out.substr(pos, end-pos) << '\n';
+                return 0;
+            }
         }
         std::cerr << "[错误] 无法获取 proot 版本，请确认 proot 已安装\n";
         return 1;
