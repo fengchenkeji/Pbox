@@ -135,6 +135,8 @@ jobs:
             -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH \
             -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH \
             -DQt6_DIR="$QT_ANDROID_DIR/lib/cmake/Qt6" \
+            -DANDROID_SDK_ROOT="$ANDROID_HOME" \
+            -DANDROID_NDK_ROOT="$NDK_DIR" \
             -DPBOX_PROOT_LIB="/tmp/libpbox_proot.so"
 
           make -j$(nproc)
