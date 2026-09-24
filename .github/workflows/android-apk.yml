@@ -51,11 +51,9 @@ jobs:
           for d in "$ANDROID_HOME/platforms/"android-*-ext*; do
             [ -d "$d" ] && sudo rm -rf "$d" && echo "removed: $(basename $d)"
           done
-          # 创建符号链接：android-37 -> android-37.0（Qt找android-37，实际目录是android-37.0）
-          if [ -d "$ANDROID_HOME/platforms/android-37.0" ] && [ ! -e "$ANDROID_HOME/platforms/android-37" ]; then
-            sudo ln -s android-37.0 "$ANDROID_HOME/platforms/android-37"
-            echo "created symlink: android-37 -> android-37.0"
-          fi
+          # 删除android-37相关目录（目录名android-37.0与gradle期望的android-37不匹配）
+          sudo rm -rf "$ANDROID_HOME/platforms/android-37"*
+          # 保留android-35作为compileSdk
           echo "最终platform列表:"
           ls "$ANDROID_HOME/platforms/"
 
