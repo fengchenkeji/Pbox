@@ -104,13 +104,16 @@ jobs:
       - name: CMake 构建
         run: |
           set -e
-          QT_ANDROID_DIR="${{ github.workspace }}/Qt/${{ env.QT_VERSION }}/${{ env.QT_ARCH }}"
-          QT_HOST_DIR="${{ github.workspace }}/Qt/${{ env.QT_VERSION }}/gcc_64"
+          # install-qt-action输出目录是 $workspace/Qt/Qt/<version>/...
+          QT_ROOT="${{ github.workspace }}/Qt/Qt"
+          QT_ANDROID_DIR="${QT_ROOT}/${{ env.QT_VERSION }}/${{ env.QT_ARCH }}"
+          QT_HOST_DIR="${QT_ROOT}/${{ env.QT_VERSION }}/gcc_64"
 
           echo "=== 构建环境 ==="
           echo "Qt Android: $QT_ANDROID_DIR"
           echo "Qt Host:    $QT_HOST_DIR"
           echo "NDK:        $NDK_DIR"
+          ls "$QT_ROOT/${{ env.QT_VERSION }}/"
 
           mkdir -p android-app/build
           cd android-app/build
@@ -130,7 +133,7 @@ jobs:
       - name: 打包 APK
         run: |
           cd android-app/build
-          QT_ANDROID_DIR="${{ github.workspace }}/Qt/${{ env.QT_VERSION }}/${{ env.QT_ARCH }}"
+          QT_ROOT="${{ github.workspace }}/Qt/Qt"
 
           # Qt for Android会自动生成gradle工程在 android-build/
           if [ -d "android-build" ]; then
