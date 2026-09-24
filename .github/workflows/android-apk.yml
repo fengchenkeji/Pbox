@@ -45,6 +45,15 @@ jobs:
           echo "NDK版本: $(basename $NDK_DIR)"
           test -f "$NDK_DIR/build/cmake/android.toolchain.cmake" && echo "toolchain OK"
 
+      - name: 清理不完整的Android扩展SDK
+        run: |
+          # android-36-ext19是Privacy Sandbox扩展SDK，aapt2无法加载
+          # 删除它让Qt选择完整的android-35或android-34
+          sudo rm -rf "$ANDROID_HOME/platforms/android-36-ext19"
+          sudo rm -rf "$ANDROID_HOME/platforms/android-36-ext18"
+          echo "已清理不完整的扩展SDK"
+          ls "$ANDROID_HOME/platforms/" | grep -v ext
+
       - name: Cache Qt
         id: cache-qt
         uses: actions/cache@v4
