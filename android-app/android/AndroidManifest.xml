@@ -1,0 +1,75 @@
+<?xml version="1.0"?>
+<!--
+/***************************************************************************
+** Pbox - AndroidManifest.xml
+**
+** Copyright (C) 2026 fengchenkeji
+** Distributed under the GPLv3 License.
+****************************************************************************/
+-->
+<manifest package="com.pbox.app"
+          android:versionCode="1"
+          android:versionName="1.0.0"
+          xmlns:android="http://schemas.android.com/apk/res/android"
+          xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- 网络权限：下载rootfs镜像 -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+
+    <!-- 存储权限：读写rootfs文件 -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+                     android:maxSdkVersion="29"/>
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+                     android:maxSdkVersion="32"/>
+
+    <!-- 查询所有文件（Android 11+，用于访问/sdcard挂载） -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+                     tools:ignore="ScopedStorage"/>
+
+    <!-- 前台服务（容器运行时保持） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+
+    <!-- 硬件特性 -->
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false"/>
+    <uses-feature android:name="android.hardware.faketouch" android:required="true"/>
+
+    <!-- 最低API 24 (Android 7.0)，覆盖95%+设备 -->
+    <uses-sdk android:minSdkVersion="24"
+              android:targetSdkVersion="34"/>
+
+    <application android:label="Pbox"
+                 android:icon="@drawable/icon"
+                 android:roundIcon="@drawable/icon"
+                 android:allowBackup="true"
+                 android:usesCleartextTraffic="true"
+                 android:requestLegacyExternalStorage="true"
+                 android:hardwareAccelerated="true"
+                 android:extractNativeLibs="true"
+                 tools:targetApi="34">
+
+        <!-- Qt Activity -->
+        <activity android:name="org.qtproject.qt.android.bindings.QtActivity"
+                  android:configChanges="orientation|uiMode|screenSize|screenLayout|smallestScreenSize|density|keyboard|keyboardHidden|navigation|locale|fontScale"
+                  android:launchMode="singleTop"
+                  android:exported="true"
+                  android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+            <meta-data android:name="android.app.lib_name" android:value="PboxAndroid"/>
+            <meta-data android:name="android.app.app_name" android:value="Pbox"/>
+        </activity>
+
+        <!-- 文件提供者（可选，用于导出rootfs） -->
+        <provider android:name="androidx.core.content.FileProvider"
+                  android:authorities="com.pbox.app.fileprovider"
+                  android:exported="false"
+                  android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS"
+                       android:resource="@xml/file_paths"/>
+        </provider>
+    </application>
+</manifest>
