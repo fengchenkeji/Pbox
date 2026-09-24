@@ -114,6 +114,10 @@ jobs:
           echo "Qt Host:    $QT_HOST_DIR"
           echo "NDK:        $NDK_DIR"
           ls "$QT_ROOT/${{ env.QT_VERSION }}/"
+          echo "=== 查找Qt6Config.cmake ==="
+          find "$QT_ROOT" -name "Qt6Config.cmake" 2>/dev/null | head -10
+          find "$QT_ANDROID_DIR" -name "Qt6Config.cmake" 2>/dev/null
+          ls "$QT_ANDROID_DIR/lib/cmake/" 2>/dev/null || echo "no lib/cmake dir"
 
           mkdir -p android-app/build
           cd android-app/build
