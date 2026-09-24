@@ -146,6 +146,13 @@ jobs:
 
           # Qt for Android会自动生成gradle工程在 android-build/
           if [ -d "android-build" ]; then
+            # 把proot二进制和依赖so复制到APK的lib目录
+            mkdir -p android-build/libs/arm64-v8a
+            cp /tmp/libpbox_proot.so android-build/libs/arm64-v8a/
+            # 复制其他proot依赖so（libtalloc等）
+            find /tmp -maxdepth 1 -name "*.so" -exec cp {} android-build/libs/arm64-v8a/ \; 2>/dev/null || true
+            ls -la android-build/libs/arm64-v8a/
+
             cd android-build
             chmod +x gradlew
             ./gradlew assembleRelease --no-daemon

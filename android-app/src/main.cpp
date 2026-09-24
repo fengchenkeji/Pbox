@@ -3,7 +3,6 @@
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QDebug>
-#include <QtAndroid>
 
 #include "pbox_paths.h"
 #include "container_manager.h"

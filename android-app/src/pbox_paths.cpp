@@ -2,8 +2,11 @@
 #include "pbox_paths.h"
 #include <QStandardPaths>
 #include <QCoreApplication>
-#include <QAndroidJniObject>
 #include <QDebug>
+#ifdef Q_OS_ANDROID
+#include <QJniObject>
+#include <QJniEnvironment>
+#endif
 #include <sys/stat.h>
 #include <cstdlib>
 
@@ -17,23 +20,21 @@ void PboxPaths::initialize()
 
     // 通过Qt获取App私有文件目录
     QString filesPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    // AppDataLocation 返回 /data/data/com.pbox.app/files
     s_appFilesDir = filesPath.toStdString();
 
-    // 通过Android API获取nativeLibraryDir
+#ifdef Q_OS_ANDROID
+    // 通过Android JNI获取nativeLibraryDir
     // Activity.getApplicationInfo().nativeLibraryDir
-    QAndroidJniObject activity = QAndroidJniObject::callStaticObjectMethod(
+    QJniObject activity = QJniObject::callStaticMethod<jobject>(
         "org/qtproject/qt/android/QtNative",
-        "getActivity",
-        "()Landroid/app/Activity;"
+        "getActivity"
     );
     if (activity.isValid()) {
-        QAndroidJniObject appInfo = activity.callObjectMethod(
-            "getApplicationInfo",
-            "()Landroid/content/pm/ApplicationInfo;"
+        QJniObject appInfo = activity.callMethod<jobject>(
+            "getApplicationInfo"
         );
         if (appInfo.isValid()) {
-            QAndroidJniObject libDir = appInfo.getObjectField(
+            QJniObject libDir = appInfo.getObjectField(
                 "nativeLibraryDir",
                 "Ljava/lang/String;"
             );
@@ -42,11 +43,14 @@ void PboxPaths::initialize()
             }
         }
     }
+#endif
 
-    // 兜底：如果JNI获取失败，用常见路径猜测
+    // 兜底：如果JNI获取失败，用applicationDirPath
     if (s_nativeLibDir.empty()) {
-        qWarning() << "无法通过JNI获取nativeLibraryDir，使用默认路径";
-        s_nativeLibDir = s_appFilesDir + "/lib";
+        QString dir = QCoreApplication::applicationDirPath();
+        s_nativeLibDir = dir.toStdString();
+        qWarning() << "JNI获取nativeLibraryDir失败，使用applicationDirPath:"
+                   << QString::fromStdString(s_nativeLibDir);
     }
 
     s_initialized = true;
@@ -55,19 +59,11 @@ void PboxPaths::initialize()
     qInfo() << "  nativeLibDir:" << QString::fromStdString(s_nativeLibDir);
 }
 
-std::string PboxPaths::appFilesDir()
-{
-    return s_appFilesDir;
-}
-
-std::string PboxPaths::nativeLibDir()
-{
-    return s_nativeLibDir;
-}
+std::string PboxPaths::appFilesDir() { return s_appFilesDir; }
+std::string PboxPaths::nativeLibDir() { return s_nativeLibDir; }
 
 std::string PboxPaths::prootBin()
 {
-    // proot在APK中命名为libpbox_proot.so，放在nativeLibraryDir
     return s_nativeLibDir + "/libpbox_proot.so";
 }
 

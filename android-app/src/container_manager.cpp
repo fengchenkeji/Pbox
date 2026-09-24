@@ -15,7 +15,6 @@
 #include <QJsonArray>
 #include <QProcess>
 #include <QDir>
-#include <QtAndroid>
 
 #include <unistd.h>
 #include <sys/utsname.h>
