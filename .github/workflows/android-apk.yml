@@ -13,9 +13,6 @@ on:
 env:
   QT_VERSION: "6.5.3"
   QT_ARCH: "android_arm64_v8a"
-  ANDROID_NDK_VERSION: "26.1.10909125"
-  ANDROID_BUILD_TOOLS: "34.0.0"
-  ANDROID_PLATFORM: "android-34"
 
 jobs:
   build-apk:
@@ -27,13 +24,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: |
-            platforms;${{ env.ANDROID_PLATFORM }}
-            build-tools;${{ env.ANDROID_BUILD_TOOLS }}
-            ndk;${{ env.ANDROID_NDK_VERSION }}
+      - name: 环境信息
+        run: |
+          echo "=== Runner预装Android SDK ==="
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          ls "$ANDROID_HOME"
+          echo "=== 预装NDK版本 ==="
+          ls "$ANDROID_HOME/ndk/"
+          echo "=== 预装Build-Tools ==="
+          ls "$ANDROID_HOME/build-tools/"
+          echo "=== 预装Platforms ==="
+          ls "$ANDROID_HOME/platforms/"
+
+      - name: 自动发现NDK路径
+        run: |
+          # 自动选最新的NDK版本，不硬编码
+          NDK_DIR=$(find "$ANDROID_HOME/ndk" -maxdepth 1 -type d | sort | tail -1)
+          echo "NDK_DIR=$NDK_DIR" >> $GITHUB_ENV
+          echo "NDK版本: $(basename $NDK_DIR)"
+          test -f "$NDK_DIR/build/cmake/android.toolchain.cmake" && echo "toolchain OK"
 
       - name: Cache Qt
         id: cache-qt
@@ -53,13 +63,13 @@ jobs:
           hosted: 'linux'
           set-env: 'false'
 
-      - name: Download proot from Termux
+      - name: 下载proot (Termux deb)
         run: |
           set -e
           REPO="https://packages.termux.dev/apt/termux-main"
           ARCH="aarch64"
 
-          echo "=== 下载proot deb包 ==="
+          echo "=== 下载proot deb ==="
           curl -fL "${REPO}/dists/stable/main/binary-${ARCH}/Packages" -o /tmp/Packages
           PROOT_DEB=$(grep -A30 "^Package: proot$" /tmp/Packages | grep "^Filename:" | head -1 | awk '{print $2}')
           curl -fL "${REPO}/${PROOT_DEB}" -o /tmp/proot.deb
@@ -70,37 +80,26 @@ jobs:
           curl -fL "${REPO}/${TALLOC_DEB}" -o /tmp/talloc.deb
           dpkg-deb -x /tmp/talloc.deb /tmp/talloc-extract
 
-          # 提取proot二进制，重命名为libpbox_proot.so以便打包进APK
+          # 提取proot二进制，重命名为libpbox_proot.so（Android W^X要求放lib目录）
           PROOT_BIN=$(find /tmp/proot-extract -name proot -type f | head -1)
-          echo "proot binary: $PROOT_BIN"
           cp "$PROOT_BIN" /tmp/libpbox_proot.so
           chmod +x /tmp/libpbox_proot.so
           file /tmp/libpbox_proot.so
 
-          # 提取loader
+          # loader和依赖so
           find /tmp/proot-extract -name "*.so" -exec cp {} /tmp/ \; 2>/dev/null || true
-          ls -la /tmp/*.so || true
-
-          # libtalloc
           find /tmp/talloc-extract -name "libtalloc.so*" -exec cp {} /tmp/ \; 2>/dev/null || true
 
-          echo "PROOT_LIB=/tmp/libpbox_proot.so" >> $GITHUB_ENV
-
-      - name: Build with CMake
+      - name: CMake 构建
         run: |
           set -e
-
-          QT_DIR="${{ github.workspace }}/Qt/${{ env.QT_VERSION }}/gcc_64"
-          # android_arch路径
           QT_ANDROID_DIR="${{ github.workspace }}/Qt/${{ env.QT_VERSION }}/${{ env.QT_ARCH }}"
+          QT_HOST_DIR="${{ github.workspace }}/Qt/${{ env.QT_VERSION }}/gcc_64"
 
-          NDK_DIR="${ANDROID_HOME}/ndk/${{ env.ANDROID_NDK_VERSION }}"
-          HOST_TAG=$(ls "$NDK_DIR/toolchains/llvm/prebuilt/")
-
-          echo "=== 环境信息 ==="
+          echo "=== 构建环境 ==="
           echo "Qt Android: $QT_ANDROID_DIR"
-          echo "NDK: $NDK_DIR"
-          echo "Host tag: $HOST_TAG"
+          echo "Qt Host:    $QT_HOST_DIR"
+          echo "NDK:        $NDK_DIR"
 
           mkdir -p android-app/build
           cd android-app/build
@@ -112,48 +111,28 @@ jobs:
             -DANDROID_STL="c++_shared" \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_PREFIX_PATH="$QT_ANDROID_DIR" \
-            -DQT_HOST_PATH="$QT_DIR" \
-            -DPBOX_PROOT_LIB="/tmp/libpbox_proot.so" \
-            -DANDROID_SDK_ROOT="$ANDROID_HOME" \
-            -DCMAKE_FIND_ROOT_PATH="$QT_ANDROID_DIR"
+            -DQT_HOST_PATH="$QT_HOST_DIR" \
+            -DPBOX_PROOT_LIB="/tmp/libpbox_proot.so"
 
           make -j$(nproc)
-          ls -la
 
-      - name: Build APK
+      - name: 打包 APK
         run: |
           cd android-app/build
-          # androiddeployqt 打包APK
           QT_ANDROID_DIR="${{ github.workspace }}/Qt/${{ env.QT_VERSION }}/${{ env.QT_ARCH }}"
 
-          # 生成的APK在 build/android-build/ 下
-          ls -la android-build/ 2>/dev/null || true
-
-          # 如果没有自动生成APK，手动用gradle
-          if [ -f "android-build/build.gradle" ]; then
+          # Qt for Android会自动生成gradle工程在 android-build/
+          if [ -d "android-build" ]; then
             cd android-build
             chmod +x gradlew
             ./gradlew assembleRelease --no-daemon
             find . -name "*.apk"
           fi
 
-      - name: Rename APK
-        run: |
-          APK=$(find android-app -name "*.apk" | head -1)
-          if [ -n "$APK" ]; then
-            cp "$APK" pbox-android-arm64.apk
-            ls -lh pbox-android-arm64.apk
-          else
-            echo "WARNING: No APK found"
-            find android-app -type f | head -50
-          fi
-
-      - name: Upload APK
+      - name: 重命名并上传APK
         uses: actions/upload-artifact@v4
         with:
           name: pbox-android-apk
           path: |
-            pbox-android-arm64.apk
             android-app/build/android-build/build/outputs/apk/**/*.apk
           retention-days: 30
-          if-no-files-found: warn
