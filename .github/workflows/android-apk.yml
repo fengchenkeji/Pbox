@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
 
 env:
-  QT_VERSION: "6.5.3"
+  QT_VERSION: "6.5.2"
   QT_ARCH: "android_arm64_v8a"
 
 jobs:
@@ -57,10 +57,11 @@ jobs:
         uses: jurplel/install-qt-action@v3
         with:
           version: ${{ env.QT_VERSION }}
+          host: 'linux'
+          target: 'android'
           arch: ${{ env.QT_ARCH }}
           dir: ${{ github.workspace }}/Qt
           modules: 'qtquickcontrols2 qtwebview'
-          hosted: 'linux'
           set-env: 'false'
 
       - name: 下载proot (Termux deb)
