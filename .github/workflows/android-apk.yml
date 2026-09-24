@@ -47,15 +47,16 @@ jobs:
 
       - name: 准备Android SDK环境
         run: |
-          # 删除所有现有platform，安装干净的android-34
+          # 删除所有现有platform
           for d in "$ANDROID_HOME/platforms/"android-*; do
             sudo rm -rf "$d"
           done
-          # 用sdkmanager安装android-34
-          yes | sdkmanager "platforms;android-34" "build-tools;34.0.0" 2>&1 | tail -5
+          # 用完整路径调用sdkmanager
+          SDKMGR=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f 2>/dev/null | head -1)
+          echo "sdkmanager: $SDKMGR"
+          yes | "$SDKMGR" "platforms;android-34" "build-tools;34.0.0" 2>&1 | tail -5
           echo "=== 安装后的platforms ==="
           ls "$ANDROID_HOME/platforms/"
-          echo "=== 验证android.jar ==="
           ls -la "$ANDROID_HOME/platforms/android-34/android.jar"
 
       - name: Cache Qt
