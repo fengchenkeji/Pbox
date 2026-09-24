@@ -4,6 +4,11 @@
 #include <QQmlContext>
 #include <QDebug>
 
+#include <fcntl.h>
+#include <unistd.h>
+#include <termios.h>
+#include <sys/ioctl.h>
+
 #include "pbox_paths.h"
 #include "container_manager.h"
 #include "pty_process.h"
