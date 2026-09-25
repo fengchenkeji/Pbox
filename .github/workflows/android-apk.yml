@@ -1,5 +1,4 @@
 name: Build Android APK
-
 on:
   push:
     branches: [ main, master ]
@@ -9,21 +8,17 @@ on:
   pull_request:
     branches: [ main, master ]
   workflow_dispatch:
-
 env:
   QT_VERSION: "6.5.2"
   QT_ARCH: "android_arm64_v8a"
-
 jobs:
   build-apk:
-    name: Build APK (arm64-v8a)
+    name: Build APK (arm64-v8a) DEBUG
     runs-on: ubuntu-latest
     timeout-minutes: 45
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: 环境信息
         run: |
           echo "=== Runner预装Android SDK ==="
@@ -36,7 +31,6 @@ jobs:
           ls "$ANDROID_HOME/build-tools/"
           echo "=== 预装Platforms ==="
           ls "$ANDROID_HOME/platforms/"
-
       - name: 自动发现NDK路径
         run: |
           # 自动选最新的NDK版本，不硬编码
@@ -44,7 +38,6 @@ jobs:
           echo "NDK_DIR=$NDK_DIR" >> $GITHUB_ENV
           echo "NDK版本: $(basename $NDK_DIR)"
           test -f "$NDK_DIR/build/cmake/android.toolchain.cmake" && echo "toolchain OK"
-
       - name: 准备Android SDK环境
         run: |
           # 删除所有现有platform
@@ -58,14 +51,12 @@ jobs:
           echo "=== 安装后的platforms ==="
           ls "$ANDROID_HOME/platforms/"
           ls -la "$ANDROID_HOME/platforms/android-34/android.jar"
-
       - name: Cache Qt
         id: cache-qt
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/Qt
           key: ${{ runner.os }}-qt-${{ env.QT_VERSION }}-${{ env.QT_ARCH }}
-
       - name: Install Qt (Desktop host tools)
         if: steps.cache-qt.outputs.cache-hit != 'true'
         uses: jurplel/install-qt-action@v3
@@ -76,7 +67,6 @@ jobs:
           arch: 'gcc_64'
           dir: ${{ github.workspace }}/Qt
           set-env: 'false'
-
       - name: Install Qt (Android)
         if: steps.cache-qt.outputs.cache-hit != 'true'
         uses: jurplel/install-qt-action@v3
@@ -87,34 +77,28 @@ jobs:
           arch: ${{ env.QT_ARCH }}
           dir: ${{ github.workspace }}/Qt
           set-env: 'false'
-
       - name: 下载proot (Termux deb)
         run: |
           set -e
           REPO="https://packages.termux.dev/apt/termux-main"
           ARCH="aarch64"
-
           echo "=== 下载proot deb ==="
           curl -fL "${REPO}/dists/stable/main/binary-${ARCH}/Packages" -o /tmp/Packages
           PROOT_DEB=$(grep -A30 "^Package: proot$" /tmp/Packages | grep "^Filename:" | head -1 | awk '{print $2}')
           curl -fL "${REPO}/${PROOT_DEB}" -o /tmp/proot.deb
           dpkg-deb -x /tmp/proot.deb /tmp/proot-extract
-
           echo "=== 下载libtalloc ==="
           TALLOC_DEB=$(grep -A30 "^Package: libtalloc$" /tmp/Packages | grep "^Filename:" | head -1 | awk '{print $2}')
           curl -fL "${REPO}/${TALLOC_DEB}" -o /tmp/talloc.deb
           dpkg-deb -x /tmp/talloc.deb /tmp/talloc-extract
-
           # 提取proot二进制，重命名为libpbox_proot.so（Android W^X要求放lib目录）
           PROOT_BIN=$(find /tmp/proot-extract -name proot -type f | head -1)
           cp "$PROOT_BIN" /tmp/libpbox_proot.so
           chmod +x /tmp/libpbox_proot.so
           file /tmp/libpbox_proot.so
-
           # loader和依赖so
           find /tmp/proot-extract -name "*.so" -exec cp {} /tmp/ \; 2>/dev/null || true
           find /tmp/talloc-extract -name "libtalloc.so*" -exec cp {} /tmp/ \; 2>/dev/null || true
-
       - name: CMake 构建
         run: |
           set -e
@@ -122,7 +106,6 @@ jobs:
           QT_ROOT="${{ github.workspace }}/Qt/Qt"
           QT_ANDROID_DIR="${QT_ROOT}/${{ env.QT_VERSION }}/${{ env.QT_ARCH }}"
           QT_HOST_DIR="${QT_ROOT}/${{ env.QT_VERSION }}/gcc_64"
-
           echo "=== 构建环境 ==="
           echo "Qt Android: $QT_ANDROID_DIR"
           echo "Qt Host:    $QT_HOST_DIR"
@@ -132,16 +115,14 @@ jobs:
           find "$QT_ROOT" -name "Qt6Config.cmake" 2>/dev/null | head -10
           find "$QT_ANDROID_DIR" -name "Qt6Config.cmake" 2>/dev/null
           ls "$QT_ANDROID_DIR/lib/cmake/" 2>/dev/null || echo "no lib/cmake dir"
-
           mkdir -p android-app/build
           cd android-app/build
-
           cmake .. \
             -DCMAKE_TOOLCHAIN_FILE="${NDK_DIR}/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI="arm64-v8a" \
             -DANDROID_PLATFORM="android-24" \
             -DANDROID_STL="c++_shared" \
-            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_PREFIX_PATH="$QT_ANDROID_DIR" \
             -DQT_HOST_PATH="$QT_HOST_DIR" \
             -DCMAKE_FIND_ROOT_PATH="$QT_ANDROID_DIR" \
@@ -152,14 +133,11 @@ jobs:
             -DANDROID_SDK_ROOT="$ANDROID_HOME" \
             -DANDROID_NDK_ROOT="$NDK_DIR" \
             -DPBOX_PROOT_LIB="/tmp/libpbox_proot.so"
-
           make -j$(nproc)
-
       - name: 打包 APK
         run: |
           cd android-app/build
           QT_ROOT="${{ github.workspace }}/Qt/Qt"
-
           # Qt for Android会自动生成gradle工程在 android-build/
           if [ -d "android-build" ]; then
             # 把proot二进制和依赖so复制到APK的lib目录
@@ -168,17 +146,15 @@ jobs:
             # 复制其他proot依赖so（libtalloc等）
             find /tmp -maxdepth 1 -name "*.so" -exec cp {} android-build/libs/arm64-v8a/ \; 2>/dev/null || true
             ls -la android-build/libs/arm64-v8a/
-
             cd android-build
             chmod +x gradlew
-            ./gradlew assembleRelease --no-daemon
+            ./gradlew assembleDebug --no-daemon
             find . -name "*.apk"
           fi
-
       - name: 重命名并上传APK
         uses: actions/upload-artifact@v4
         with:
-          name: pbox-android-apk
+          name: pbox-android-debug-apk
           path: |
             android-app/build/android-build/build/outputs/apk/**/*.apk
           retention-days: 30
