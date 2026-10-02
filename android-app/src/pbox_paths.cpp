@@ -3,6 +3,7 @@
 #include <QStandardPaths>
 #include <QCoreApplication>
 #include <QDebug>
+#include <QFile>
 #ifdef Q_OS_ANDROID
 #include <QJniObject>
 #include <QJniEnvironment>
