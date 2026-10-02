@@ -11,7 +11,9 @@ on:
 env:
   QT_VERSION: "6.5.2"
   QT_ARCH: "android_arm64_v8a"
-  ANDROID_API: "26"   # minSdk: Android 8.0
+  ANDROID_API: "26"      # minSdk: Android 8.0
+  ANDROID_SDK: "34"      # 稳定可用的 platform（35 在 runner 上损坏）
+  BUILD_TOOLS: "34.0.0"
 
 jobs:
   build-apk:
@@ -28,11 +30,16 @@ jobs:
           echo "NDK_DIR=$NDK_DIR" >> $GITHUB_ENV
           echo "NDK: $(basename $NDK_DIR)"
 
-      - name: 准备Android SDK (API 35)
+      - name: 准备Android SDK (API ${{ env.ANDROID_SDK }})
         run: |
+          # 删除所有现有platform和扩展SDK（避免aapt2加载损坏/不完整目录）
           for d in "$ANDROID_HOME/platforms/"android-*; do sudo rm -rf "$d"; done
+          for d in "$ANDROID_HOME/platforms/"android-*-ext*; do sudo rm -rf "$d"; done
           SDKMGR=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f 2>/dev/null | head -1)
-          yes | "$SDKMGR" "platforms;android-35" "build-tools;35.0.0" 2>&1 | tail -5
+          yes | "$SDKMGR" "platforms;android-${{ env.ANDROID_SDK }}" "build-tools;${{ env.BUILD_TOOLS }}" 2>&1 | tail -5
+          echo "=== 验证 ==="
+          ls "$ANDROID_HOME/platforms/"
+          ls -la "$ANDROID_HOME/platforms/android-${{ env.ANDROID_SDK }}/android.jar"
 
       - name: Cache Qt
         id: cache-qt
