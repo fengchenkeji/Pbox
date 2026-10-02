@@ -1,4 +1,7 @@
 // main.cpp - Pbox Android App 入口
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE   // bionic 的 backtrace 系列函数需要 __USE_GNU
+#endif
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
