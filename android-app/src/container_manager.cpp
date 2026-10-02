@@ -29,6 +29,18 @@ ContainerManager::ContainerManager(QObject* parent)
     qRegisterMetaType<InstalledContainer>();
 }
 
+void ContainerManager::setPtraceAvailable(bool ok)
+{
+    if (m_ptraceAvailable == ok) return;
+    m_ptraceAvailable = ok;
+    emit ptraceAvailableChanged();
+}
+
+QString ContainerManager::logPath() const
+{
+    return QString::fromStdString(PboxPaths::logDir());
+}
+
 QString ContainerManager::arch()
 {
     return detectNativeArch();
@@ -37,13 +49,29 @@ QString ContainerManager::arch()
 QString ContainerManager::detectNativeArch()
 {
     struct utsname u;
-    if (uname(&u) != 0) return "arm64";
-    QString machine(u.machine);
-    if (machine == "aarch64" || machine == "arm64") return "arm64";
-    if (machine.startsWith("arm")) return "armhf";
-    if (machine == "x86_64") return "amd64";
-    if (machine == "riscv64") return "riscv64";
-    return machine;
+    if (uname(&u) == 0) {
+        QString machine(u.machine);
+        if (machine == "aarch64" || machine == "arm64") return "arm64";
+        if (machine.startsWith("arm")) return "armhf";
+        if (machine == "x86_64" || machine == "amd64") return "amd64";
+        if (machine == "riscv64") return "riscv64";
+        if (!machine.isEmpty()) return machine;
+    }
+    // uname 失败/异常时用 QSysInfo 兜底
+    QString qarch = QSysInfo::currentCpuArchitecture();
+    if (qarch == "arm64" || qarch == "aarch64") return "arm64";
+    if (qarch.startsWith("arm")) return "armhf";
+    if (qarch == "x86_64" || qarch == "amd64") return "amd64";
+    if (qarch == "riscv64") return "riscv64";
+    // 最后兜底
+    QFile f("/proc/cpuinfo");
+    if (f.open(QIODevice::ReadOnly)) {
+        QString cpu = QString::fromUtf8(f.readAll());
+        if (cpu.contains("aarch64")) return "arm64";
+        if (cpu.contains("ARMv")) return "armhf";
+        if (cpu.contains("GenuineIntel") || cpu.contains("AuthenticAMD")) return "amd64";
+    }
+    return "arm64";
 }
 
 QStringList ContainerManager::listAvailableOS()
@@ -371,19 +399,36 @@ void ContainerManager::buildProotArgs(const QString& rootfsPath, QStringList& ar
 
 bool ContainerManager::startContainer(const QString& tag, qint64 ptyMasterFd)
 {
+    if (!m_ptraceAvailable) {
+        emit logMessage("错误: 当前环境禁止 ptrace，proot 无法运行。"
+                        "（卓易通/鸿蒙兼容层通常限制 ptrace）");
+        return false;
+    }
+
     QString rootfs = QString::fromStdString(PboxPaths::rootfsDir(tag.toStdString()));
     if (!QDir(rootfs).exists()) {
         emit logMessage("容器未安装: " + tag);
         return false;
     }
 
-    QStringList args;
-    buildProotArgs(rootfs, args);
-
     QString proot = QString::fromStdString(PboxPaths::prootBin());
     QString loader = QString::fromStdString(PboxPaths::prootLoader());
 
+    if (!QFile::exists(proot)) {
+        emit logMessage("错误: 未找到内置 proot: " + proot);
+        return false;
+    }
+    if (!QFile::exists(loader)) {
+        emit logMessage("错误: 未找到 proot loader: " + loader);
+        return false;
+    }
+
+    QStringList args;
+    buildProotArgs(rootfs, args);
+
     emit logMessage("启动容器: " + tag);
+    qInfo() << "proot:" << proot << " loader:" << loader;
+    qInfo() << "args:" << args.join(' ');
 
     pid_t pid = fork();
     if (pid == 0) {

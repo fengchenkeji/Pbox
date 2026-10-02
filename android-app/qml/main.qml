@@ -113,8 +113,9 @@ ApplicationWindow {
                     }
                     Item { Layout.fillWidth: true }
                     Label {
-                        text: "proot: " + containerManager.prootVersion
-                        color: subtext
+                        text: containerManager.ptraceAvailable ? "proot: " + containerManager.prootVersion
+                                                              : "⚠ ptrace 被禁止"
+                        color: containerManager.ptraceAvailable ? subtext : red
                         font.pixelSize: 12
                         elide: Text.ElideRight
                     }

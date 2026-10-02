@@ -3,6 +3,7 @@
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QDebug>
+#include <QFile>
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -11,10 +12,89 @@
 #include <thread>
 #include <atomic>
 #include <cstring>
+#include <csignal>
+#include <cstdio>
+#include <cstdlib>
+#include <execinfo.h>
+#include <sys/wait.h>
+#include <sys/ptrace.h>
+#include <sys/types.h>
 
 #include "pbox_paths.h"
 #include "container_manager.h"
 
+// ===== 崩溃捕获：写入 files/logs/crash.log =====
+static int g_crashFd = -1;
+
+static void crashHandler(int sig)
+{
+    char buf[128];
+    int n = snprintf(buf, sizeof(buf), "\n===== CRASH signal=%d (%s) =====\n",
+                     sig, strsignal(sig));
+    if (g_crashFd >= 0) {
+        write(g_crashFd, buf, n);
+        void* bt[64];
+        int cnt = backtrace(bt, 64);
+        backtrace_symbols_fd(bt, cnt, g_crashFd);
+        fsync(g_crashFd);
+        close(g_crashFd);
+    }
+    _exit(128 + sig);
+}
+
+static void initCrashLog()
+{
+    QString logPath = QString::fromStdString(PboxPaths::logDir()) + "/crash.log";
+    g_crashFd = open(logPath.toUtf8().constData(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    signal(SIGSEGV, crashHandler);
+    signal(SIGABRT, crashHandler);
+    signal(SIGBUS, crashHandler);
+    signal(SIGILL, crashHandler);
+    signal(SIGFPE, crashHandler);
+}
+
+// ===== Qt 日志：写入 files/logs/qt.log =====
+static FILE* g_qtLog = nullptr;
+
+static const char* qTypeStr(QtMsgType t)
+{
+    switch (t) {
+    case QtDebugMsg: return "DEBUG";
+    case QtInfoMsg: return "INFO";
+    case QtWarningMsg: return "WARN";
+    case QtCriticalMsg: return "ERROR";
+    case QtFatalMsg: return "FATAL";
+    }
+    return "?";
+}
+
+static void qtLogHandler(QtMsgType type, const QMessageLogContext& ctx, const QString& msg)
+{
+    Q_UNUSED(ctx);
+    if (g_qtLog) {
+        fprintf(g_qtLog, "[%s] %s\n", qTypeStr(type), msg.toUtf8().constData());
+        fflush(g_qtLog);
+    }
+    if (type == QtFatalMsg) abort();
+}
+
+// ===== ptrace 可用性预检（proot 依赖 ptrace）=====
+static bool checkPtraceAvailable()
+{
+    pid_t pid = fork();
+    if (pid < 0) return false;
+    if (pid == 0) {
+        // 子进程：TRACEME 成功则退出码0，否则1
+        if (ptrace(PTRACE_TRACEME, 0, 0, 0) == 0)
+            _exit(0);
+        _exit(1);
+    }
+    int status = 0;
+    waitpid(pid, &status, 0);
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
+// ===== 终端桥接 =====
 class TerminalBridge : public QObject {
     Q_OBJECT
 public:
@@ -35,7 +115,12 @@ public:
         unlockpt(master);
         m_masterFd = master;
 
-        ContainerManager::instance().startContainer(tag, master);
+        if (!ContainerManager::instance().startContainer(tag, master)) {
+            emit outputReceived(QStringLiteral("\x1b[31m容器启动失败，请查看日志\x1b[0m\n"));
+            close(m_masterFd);
+            m_masterFd = -1;
+            return;
+        }
 
         m_running = true;
         m_readThread = std::thread([this]() {
@@ -52,6 +137,7 @@ public:
                     break;
                 }
             }
+            m_running = false;
             emit outputReceived(QStringLiteral("\r\n\x1b[33m[进程已退出]\x1b[0m\n"));
         });
     }
@@ -89,16 +175,36 @@ private:
 
 int main(int argc, char* argv[])
 {
-    QGuiApplication app(argc, argv);
-    QGuiApplication::setApplicationName("Pbox");
-    QGuiApplication::setOrganizationName("Pbox");
-    QGuiApplication::setApplicationVersion("1.0.0");
+    // 卓易通等兼容环境 GPU/OpenGL 支持不完整，强制软件渲染避免启动闪退
+    qputenv("QT_QUICK_BACKEND", "software");
+    qputenv("QSG_RHI_BACKEND", "software");
 
+    // 路径初始化（纯文件操作，先于 QGuiApplication）
     PboxPaths::initialize();
     PboxPaths::ensureDirs();
 
+    // 崩溃捕获 + Qt 日志
+    initCrashLog();
+    QString logPath = QString::fromStdString(PboxPaths::logDir()) + "/qt.log";
+    g_qtLog = fopen(logPath.toUtf8().constData(), "w");
+    qInstallMessageHandler(qtLogHandler);
+
+    // ptrace 预检
+    bool ptraceOk = checkPtraceAvailable();
+    ContainerManager::instance().setPtraceAvailable(ptraceOk);
+
+    QGuiApplication app(argc, argv);
+    QGuiApplication::setApplicationName("Pbox");
+    QGuiApplication::setOrganizationName("Pbox");
+    QGuiApplication::setApplicationVersion("1.0.1");
+
     qRegisterMetaType<InstalledContainer>();
-    qInfo() << "Pbox v1.0.0 启动, 架构:" << ContainerManager::instance().arch();
+    qInfo() << "Pbox v1.0.1 启动, 架构:" << ContainerManager::instance().arch()
+            << ", ptrace:" << (ptraceOk ? "OK" : "DENIED");
+    qInfo() << "appFilesDir:" << QString::fromStdString(PboxPaths::appFilesDir());
+    qInfo() << "nativeLibDir:" << QString::fromStdString(PboxPaths::nativeLibDir());
+    qInfo() << "proot存在:" << QFile::exists(QString::fromStdString(PboxPaths::prootBin()))
+            << " loader存在:" << QFile::exists(QString::fromStdString(PboxPaths::prootLoader()));
 
     QQmlApplicationEngine engine;
 
@@ -113,8 +219,10 @@ int main(int argc, char* argv[])
     const QUrl url(QStringLiteral("qrc:/qml/main.qml"));
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreated,
         &app, [url](QObject* obj, const QUrl& objUrl) {
-            if (!obj && url == objUrl)
+            if (!obj && url == objUrl) {
+                qCritical() << "QML 加载失败";
                 QCoreApplication::exit(-1);
+            }
         }, Qt::QueuedConnection);
     engine.load(url);
 

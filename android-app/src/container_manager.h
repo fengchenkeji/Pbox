@@ -30,9 +30,13 @@ class ContainerManager : public QObject {
     Q_OBJECT
     Q_PROPERTY(QString arch READ arch CONSTANT)
     Q_PROPERTY(QString prootVersion READ prootVersion CONSTANT)
+    Q_PROPERTY(bool ptraceAvailable READ ptraceAvailable NOTIFY ptraceAvailableChanged)
 
 public:
     static ContainerManager& instance();
+
+    void setPtraceAvailable(bool ok);
+    bool ptraceAvailable() const { return m_ptraceAvailable; }
 
     Q_INVOKABLE QStringList listAvailableOS();
     Q_INVOKABLE QStringList listReleases(const QString& os);
@@ -44,12 +48,14 @@ public:
     Q_INVOKABLE QString arch();
     Q_INVOKABLE QString formatSize(qint64 bytes);
     Q_INVOKABLE void cancelDownload();
+    Q_INVOKABLE QString logPath() const;
 
 signals:
     void downloadProgress(double percent, const QString& message);
     void installFinished(bool success, const QString& message);
     void logMessage(const QString& msg);
     void containerStarted(const QString& tag);
+    void ptraceAvailableChanged();
 
 private slots:
     void onDownloadProgress(qint64 received, qint64 total);
@@ -78,6 +84,7 @@ private:
     QString m_rootfsDir;
     QString m_os, m_release, m_arch;
     bool m_cancelled = false;
+    bool m_ptraceAvailable = true;
 };
 
 #endif // CONTAINER_MANAGER_H
