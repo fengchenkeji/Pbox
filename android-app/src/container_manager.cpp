@@ -15,6 +15,8 @@
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <cstdlib>
+#include <cstring>
 
 ContainerManager& ContainerManager::instance()
 {
@@ -27,13 +29,6 @@ ContainerManager::ContainerManager(QObject* parent)
 {
     m_nam = new QNetworkAccessManager(this);
     qRegisterMetaType<InstalledContainer>();
-}
-
-void ContainerManager::setPtraceAvailable(bool ok)
-{
-    if (m_ptraceAvailable == ok) return;
-    m_ptraceAvailable = ok;
-    emit ptraceAvailableChanged();
 }
 
 QString ContainerManager::logPath() const
@@ -296,52 +291,44 @@ bool ContainerManager::extractRootfs(const QString& tarPath, const QString& root
 {
     QDir().mkpath(rootfsDir);
 
-    QString proot = QString::fromStdString(PboxPaths::prootBin());
+    // Android 8~17 自带 toybox tar，支持 gzip/xz/zstd（版本不同支持度不同），依次尝试
+    QStringList candidates;
+    if (tarPath.endsWith(".zst"))      candidates = {"--zstd", "-J", "-z", ""};
+    else if (tarPath.endsWith(".xz"))  candidates = {"-J", "--zstd", "-z", ""};
+    else                               candidates = {"-z", ""};
 
-    QStringList args;
-    if (tarPath.endsWith(".zst"))
-        args << "--zstd";
-    else if (tarPath.endsWith(".xz"))
-        args << "-J";
-    else if (tarPath.endsWith(".gz"))
-        args << "-z";
+    QString tarBin = QFile::exists("/system/bin/tar") ? "/system/bin/tar" : "tar";
 
-    args << "-xf" << tarPath
-         << "-C" << rootfsDir
-         << "--preserve-permissions"
-         << "--exclude=dev/*"
-         << "--exclude=proc/*"
-         << "--exclude=sys/*";
+    for (const QString& flag : candidates) {
+        QStringList args;
+        if (!flag.isEmpty()) args << flag;
+        args << "-xf" << tarPath << "-C" << rootfsDir
+             << "--exclude=dev/*"
+             << "--exclude=proc/*"
+             << "--exclude=sys/*";
 
-    QStringList fullArgs;
-    fullArgs << "--link2symlink" << "tar";
-    fullArgs.append(args);
+        QProcess proc;
+        proc.setProgram(tarBin);
+        proc.setArguments(args);
+        proc.setProcessChannelMode(QProcess::MergedChannels);
+        connect(&proc, &QProcess::readyReadStandardOutput, this, [&]() {
+            emit logMessage(QString::fromUtf8(proc.readAllStandardOutput()));
+        });
 
-    QProcess proc;
-    proc.setProgram(proot);
-    proc.setArguments(fullArgs);
+        emit logMessage("解压: tar " + args.join(' '));
+        proc.start();
+        if (!proc.waitForFinished(-1)) continue;
 
-    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-    QString loader = QString::fromStdString(PboxPaths::prootLoader());
-    if (QFile::exists(loader))
-        env.insert("PROOT_LOADER", loader);
-    // Android linker 不自动搜索 nativeLibDir，必须显式指定
-    env.insert("LD_LIBRARY_PATH", QString::fromStdString(PboxPaths::nativeLibDir()));
-    proc.setProcessEnvironment(env);
-
-    proc.setProcessChannelMode(QProcess::MergedChannels);
-    connect(&proc, &QProcess::readyReadStandardOutput, this, [&]() {
-        emit logMessage(QString::fromUtf8(proc.readAllStandardOutput()));
-    });
-
-    proc.start();
-    proc.waitForFinished(-1);
-
-    if (proc.exitCode() != 0) {
-        emit logMessage(QString("解压失败，退出码 %1").arg(proc.exitCode()));
-        return false;
+        if (proc.exitStatus() == QProcess::NormalExit && proc.exitCode() == 0) {
+            emit logMessage("rootfs 解压完成");
+            return true;
+        }
+        emit logMessage(QString("解压方式 %1 失败，尝试其他方式...")
+                        .arg(flag.isEmpty() ? "auto" : flag));
     }
-    return true;
+
+    emit logMessage("错误: rootfs 解压失败（系统 tar 不支持该压缩格式）");
+    return false;
 }
 
 void ContainerManager::fixRootfs(const QString& rootfsDir)
@@ -366,95 +353,46 @@ void ContainerManager::fixRootfs(const QString& rootfsDir)
     emit logMessage("rootfs 修复完成");
 }
 
-QString ContainerManager::pickShell(const QString& rootfsPath)
-{
-    QStringList candidates = {"/usr/bin/bash", "/bin/bash", "/usr/bin/sh", "/bin/sh"};
-    for (const QString& c : candidates)
-        if (QFile::exists(rootfsPath + c)) return c;
-    return "/bin/sh";
-}
-
-void ContainerManager::buildProotArgs(const QString& rootfsPath, QStringList& args)
-{
-    args.clear();
-    args << "--link2symlink"
-         << "--kill-on-exit"
-         << "-0"
-         << "-r" << rootfsPath
-         << "-b" << "/dev"
-         << "-b" << "/proc"
-         << "-b" << "/sys"
-         << "-b" << "/dev/null"
-         << "-w" << "/root";
-
-    QString sdcard = "/storage/emulated/0";
-    if (QFile::exists(sdcard))
-        args << "-b" << sdcard + ":/sdcard";
-
-    args << "/usr/bin/env"
-         << "-i"
-         << "HOME=/root"
-         << "TERM=xterm-256color"
-         << "LANG=C.UTF-8"
-         << "PATH=/usr/local/sbin:/usr/local/bin:/bin:/usr/bin:/sbin:/usr/sbin"
-         << "USER=root";
-
-    args << pickShell(rootfsPath) << "--login";
-}
-
 bool ContainerManager::startContainer(const QString& tag, qint64 ptyMasterFd)
 {
-    if (!m_ptraceAvailable) {
-        emit logMessage("错误: 当前环境禁止 ptrace，proot 无法运行。"
-                        "（卓易通/鸿蒙兼容层通常限制 ptrace）");
-        return false;
-    }
-
     QString rootfs = QString::fromStdString(PboxPaths::rootfsDir(tag.toStdString()));
-    if (!QDir(rootfs).exists()) {
-        emit logMessage("容器未安装: " + tag);
-        return false;
+    bool rootfsExists = QDir(rootfs).exists();
+
+    // v1.0.3 无内置 proot：启动系统 shell 终端（图形化终端能力，容器文件可浏览）
+    QString banner;
+    if (rootfsExists) {
+        banner = QStringLiteral(
+            "\x1b[32mPbox 终端 v1.0.3\x1b[0m\n"
+            "已安装容器: %1\n"
+            "当前版本未内置 proot 运行环境，无法隔离运行 Linux 程序。\n"
+            "已切换到容器 rootfs 目录，可用 ls / cd 浏览文件。\n"
+            "支持 proot 的完整版将在后续提供。\n\n").arg(rootfs);
+    } else {
+        banner = QStringLiteral(
+            "\x1b[32mPbox 终端 v1.0.3\x1b[0m\n"
+            "未找到容器 %1，这是 Android 系统 shell。\n"
+            "可执行系统命令（ls / pwd / echo 等）。\n\n").arg(rootfs);
     }
+    ::write(ptyMasterFd, banner.toUtf8().constData(), banner.toUtf8().size());
 
-    QString proot = QString::fromStdString(PboxPaths::prootBin());
-    QString loader = QString::fromStdString(PboxPaths::prootLoader());
-
-    if (!QFile::exists(proot)) {
-        emit logMessage("错误: 未找到内置 proot: " + proot);
-        return false;
-    }
-    if (!QFile::exists(loader)) {
-        emit logMessage("错误: 未找到 proot loader: " + loader);
-        return false;
-    }
-
-    QStringList args;
-    buildProotArgs(rootfs, args);
-
-    emit logMessage("启动容器: " + tag);
-    qInfo() << "proot:" << proot << " loader:" << loader;
-    qInfo() << "args:" << args.join(' ');
+    emit logMessage("启动终端: " + tag);
 
     pid_t pid = fork();
     if (pid == 0) {
         dup2(ptyMasterFd, STDIN_FILENO);
         dup2(ptyMasterFd, STDOUT_FILENO);
         dup2(ptyMasterFd, STDERR_FILENO);
-        setenv("PROOT_LOADER", loader.toUtf8().constData(), 1);
-        // Android linker 不自动搜索 nativeLibDir，必须显式指定
-        setenv("LD_LIBRARY_PATH",
-               QString::fromStdString(PboxPaths::nativeLibDir()).toUtf8().constData(), 1);
 
-        QVector<QByteArray> storage;
-        QVector<char*> argv;
-        storage.append(proot.toUtf8());
-        argv.append(storage.last().data());
-        for (const QString& a : args) {
-            storage.append(a.toUtf8());
-            argv.append(storage.last().data());
-        }
-        argv.append(nullptr);
-        execv(proot.toUtf8().constData(), argv.data());
+        setenv("TERM", "xterm-256color", 1);
+        setenv("HOME", "/data/data/com.pbox.app/files", 1);
+        setenv("PATH", "/system/bin:/system/xbin:/sbin:/bin", 1);
+        setenv("PS1", "pbox@android:/ \\$ ", 1);
+        setenv("LANG", "C.UTF-8", 1);
+
+        if (rootfsExists)
+            chdir(rootfs.toUtf8().constData());
+
+        execl("/system/bin/sh", "sh", nullptr);
         _exit(127);
     }
 
@@ -477,10 +415,5 @@ bool ContainerManager::removeContainer(const QString& tag)
 
 QString ContainerManager::prootVersion()
 {
-    QString proot = QString::fromStdString(PboxPaths::prootBin());
-    if (!QFile::exists(proot)) return "未找到 proot";
-    QProcess proc;
-    proc.start(proot, {"--version"});
-    proc.waitForFinished(3000);
-    return QString::fromUtf8(proc.readAllStandardOutput()).trimmed();
+    return QStringLiteral("未内置（终端模式 v1.0.3）");
 }

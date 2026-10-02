@@ -4,6 +4,7 @@
 #include <QQmlContext>
 #include <QDebug>
 #include <QFile>
+#include <QDir>
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -18,7 +19,6 @@
 #include <unwind.h>
 #include <dlfcn.h>
 #include <sys/wait.h>
-#include <sys/ptrace.h>
 #include <sys/types.h>
 
 #include "pbox_paths.h"
@@ -119,22 +119,6 @@ static void qtLogHandler(QtMsgType type, const QMessageLogContext& ctx, const QS
     if (type == QtFatalMsg) abort();
 }
 
-// ===== ptrace 可用性预检（proot 依赖 ptrace）=====
-static bool checkPtraceAvailable()
-{
-    pid_t pid = fork();
-    if (pid < 0) return false;
-    if (pid == 0) {
-        // 子进程：TRACEME 成功则退出码0，否则1
-        if (ptrace(PTRACE_TRACEME, 0, 0, 0) == 0)
-            _exit(0);
-        _exit(1);
-    }
-    int status = 0;
-    waitpid(pid, &status, 0);
-    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
-}
-
 // ===== 终端桥接 =====
 class TerminalBridge : public QObject {
     Q_OBJECT
@@ -224,28 +208,31 @@ int main(int argc, char* argv[])
     PboxPaths::initialize();
     PboxPaths::ensureDirs();
 
+    // 启动标记：确认 native 入口已执行（用于卓易通等兼容环境诊断）
+    {
+        QDir().mkpath(QString::fromStdString(PboxPaths::logDir()));
+        QFile boot(QString::fromStdString(PboxPaths::logDir()) + "/boot.log");
+        if (boot.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+            boot.write("native main() entered\n");
+            boot.close();
+        }
+    }
+
     // 崩溃捕获 + Qt 日志
     initCrashLog();
     QString logPath = QString::fromStdString(PboxPaths::logDir()) + "/qt.log";
     g_qtLog = fopen(logPath.toUtf8().constData(), "w");
     qInstallMessageHandler(qtLogHandler);
 
-    // ptrace 预检
-    bool ptraceOk = checkPtraceAvailable();
-    ContainerManager::instance().setPtraceAvailable(ptraceOk);
-
     QGuiApplication app(argc, argv);
     QGuiApplication::setApplicationName("Pbox");
     QGuiApplication::setOrganizationName("Pbox");
-    QGuiApplication::setApplicationVersion("1.0.2");
+    QGuiApplication::setApplicationVersion("1.0.3");
 
     qRegisterMetaType<InstalledContainer>();
-    qInfo() << "Pbox v1.0.2 启动, 架构:" << ContainerManager::instance().arch()
-            << ", ptrace:" << (ptraceOk ? "OK" : "DENIED");
+    qInfo() << "Pbox v1.0.3 启动, 架构:" << ContainerManager::instance().arch();
     qInfo() << "appFilesDir:" << QString::fromStdString(PboxPaths::appFilesDir());
     qInfo() << "nativeLibDir:" << QString::fromStdString(PboxPaths::nativeLibDir());
-    qInfo() << "proot存在:" << QFile::exists(QString::fromStdString(PboxPaths::prootBin()))
-            << " loader存在:" << QFile::exists(QString::fromStdString(PboxPaths::prootLoader()));
 
     QQmlApplicationEngine engine;
 

@@ -113,9 +113,8 @@ ApplicationWindow {
                     }
                     Item { Layout.fillWidth: true }
                     Label {
-                        text: containerManager.ptraceAvailable ? "proot: " + containerManager.prootVersion
-                                                              : "⚠ ptrace 被禁止"
-                        color: containerManager.ptraceAvailable ? subtext : red
+                        text: "终端模式 · " + containerManager.prootVersion
+                        color: subtext
                         font.pixelSize: 12
                         elide: Text.ElideRight
                     }
@@ -380,7 +379,7 @@ ApplicationWindow {
         standardButtons: Dialog.Ok
         contentItem: ColumnLayout {
             spacing: 10
-            Label { text: "Pbox v1.0.2"; font.bold: true; font.pixelSize: 16; color: text }
+            Label { text: "Pbox v1.0.3"; font.bold: true; font.pixelSize: 16; color: text }
             Label { text: "无 Root 的 proot 容器管理器"; color: subtext; wrapMode: Label.Wrap }
             Label { text: "架构: " + containerManager.arch; color: subtext; font.pixelSize: 12 }
             Label { text: "proot: " + containerManager.prootVersion; color: subtext; font.pixelSize: 12 }

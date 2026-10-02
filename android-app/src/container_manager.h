@@ -30,13 +30,9 @@ class ContainerManager : public QObject {
     Q_OBJECT
     Q_PROPERTY(QString arch READ arch CONSTANT)
     Q_PROPERTY(QString prootVersion READ prootVersion CONSTANT)
-    Q_PROPERTY(bool ptraceAvailable READ ptraceAvailable NOTIFY ptraceAvailableChanged)
 
 public:
     static ContainerManager& instance();
-
-    void setPtraceAvailable(bool ok);
-    bool ptraceAvailable() const { return m_ptraceAvailable; }
 
     Q_INVOKABLE QStringList listAvailableOS();
     Q_INVOKABLE QStringList listReleases(const QString& os);
@@ -55,7 +51,6 @@ signals:
     void installFinished(bool success, const QString& message);
     void logMessage(const QString& msg);
     void containerStarted(const QString& tag);
-    void ptraceAvailableChanged();
 
 private slots:
     void onDownloadProgress(qint64 received, qint64 total);
@@ -68,10 +63,8 @@ private:
     QStringList getMirrorUrls(const QString& os, const QString& release, const QString& arch);
     void tryNextMirror();
     bool extractRootfs(const QString& tarPath, const QString& rootfsDir);
-    void buildProotArgs(const QString& rootfsPath, QStringList& args);
     void fixRootfs(const QString& rootfsDir);
     qint64 dirSize(const QString& path);
-    QString pickShell(const QString& rootfsPath);
 
     QNetworkAccessManager* m_nam;
     QNetworkReply* m_reply = nullptr;
@@ -84,7 +77,6 @@ private:
     QString m_rootfsDir;
     QString m_os, m_release, m_arch;
     bool m_cancelled = false;
-    bool m_ptraceAvailable = true;
 };
 
 #endif // CONTAINER_MANAGER_H
