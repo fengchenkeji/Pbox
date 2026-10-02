@@ -292,6 +292,8 @@ bool ContainerManager::extractRootfs(const QString& tarPath, const QString& root
     QString loader = QString::fromStdString(PboxPaths::prootLoader());
     if (QFile::exists(loader))
         env.insert("PROOT_LOADER", loader);
+    // Android linker 不自动搜索 nativeLibDir，必须显式指定
+    env.insert("LD_LIBRARY_PATH", QString::fromStdString(PboxPaths::nativeLibDir()));
     proc.setProcessEnvironment(env);
 
     proc.setProcessChannelMode(QProcess::MergedChannels);
@@ -389,6 +391,9 @@ bool ContainerManager::startContainer(const QString& tag, qint64 ptyMasterFd)
         dup2(ptyMasterFd, STDOUT_FILENO);
         dup2(ptyMasterFd, STDERR_FILENO);
         setenv("PROOT_LOADER", loader.toUtf8().constData(), 1);
+        // Android linker 不自动搜索 nativeLibDir，必须显式指定
+        setenv("LD_LIBRARY_PATH",
+               QString::fromStdString(PboxPaths::nativeLibDir()).toUtf8().constData(), 1);
 
         QVector<QByteArray> storage;
         QVector<char*> argv;

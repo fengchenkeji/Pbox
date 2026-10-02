@@ -82,14 +82,42 @@ jobs:
           TALLOC_DEB=$(grep -A30 "^Package: libtalloc$" /tmp/Packages | grep "^Filename:" | head -1 | awk '{print $2}')
           curl -fL "${REPO}/${TALLOC_DEB}" -o /tmp/talloc.deb
           dpkg-deb -x /tmp/talloc.deb /tmp/talloc-extract
-          # 提取 proot 二进制，重命名为 libpbox_proot.so（Android W^X 要求）
+
+          # 提取 proot 二进制（Android W^X 要求放 lib 目录，命名为 libpbox_proot.so）
           PROOT_BIN=$(find /tmp/proot-extract -name proot -type f | head -1)
           cp "$PROOT_BIN" /tmp/libpbox_proot.so
           chmod +x /tmp/libpbox_proot.so
-          # loader
-          find /tmp/proot-extract -name "libproot-loader*.so" -exec cp {} /tmp/ \; 2>/dev/null || true
-          find /tmp/talloc-extract -name "libtalloc.so*" -exec cp {} /tmp/ \; 2>/dev/null || true
-          ls -la /tmp/*.so*
+
+          # 提取 loader（Termux 的 loader 在 libexec/proot/loader，无扩展名）
+          LOADER_BIN=$(find /tmp/proot-extract -path "*libexec/proot/loader" -type f | head -1)
+          if [ -n "$LOADER_BIN" ]; then
+            cp "$LOADER_BIN" /tmp/libpbox_proot_loader.so
+            chmod +x /tmp/libpbox_proot_loader.so
+            echo "LOADER OK: $(file /tmp/libpbox_proot_loader.so)"
+          else
+            echo "!! 未找到 proot loader"
+            exit 1
+          fi
+
+          # 下载 libandroid-shmem（proot 动态依赖）
+          SHMEM_DEB=$(grep -A8 "^Package: libandroid-shmem$" /tmp/Packages | grep "^Filename:" | head -1 | awk '{print $2}')
+          curl -fL "${REPO}/${SHMEM_DEB}" -o /tmp/shmem.deb
+          dpkg-deb -x /tmp/shmem.deb /tmp/shmem-extract
+          find /tmp/shmem-extract -name "libandroid-shmem.so" -exec cp {} /tmp/libandroid-shmem.so \;
+
+          # 提取 libtalloc 并重命名为 libtalloc.so（AGP 只打包 .so 结尾）
+          find /tmp/talloc-extract -name "libtalloc.so.2.5.0" -exec cp {} /tmp/libtalloc.so \;
+          chmod +x /tmp/libtalloc.so
+
+          # 用 patchelf 把 NEEDED 从 libtalloc.so.2 改为 libtalloc.so（Android linker 不支持版本化 so）
+          sudo apt-get install -y -qq patchelf >/dev/null 2>&1 || true
+          echo "=== 原始 NEEDED ==="
+          patchelf --print-needed /tmp/libpbox_proot.so || true
+          patchelf --replace-needed libtalloc.so.2 libtalloc.so /tmp/libpbox_proot.so || echo "patchelf 替换跳过"
+          echo "=== 修改后 NEEDED ==="
+          patchelf --print-needed /tmp/libpbox_proot.so
+          echo "=== 产物 ==="
+          ls -la /tmp/libpbox_proot.so /tmp/libpbox_proot_loader.so /tmp/libandroid-shmem.so /tmp/libtalloc.so
 
       - name: CMake 构建
         run: |
@@ -126,9 +154,9 @@ jobs:
           if [ -d "android-build" ]; then
             mkdir -p android-build/libs/arm64-v8a
             cp /tmp/libpbox_proot.so android-build/libs/arm64-v8a/
-            # proot loader 和依赖
-            find /tmp -maxdepth 1 -name "libproot-loader*.so" -exec cp {} android-build/libs/arm64-v8a/ \; 2>/dev/null || true
-            find /tmp -maxdepth 1 -name "libtalloc.so*" -exec cp {} android-build/libs/arm64-v8a/ \; 2>/dev/null || true
+            cp /tmp/libpbox_proot_loader.so android-build/libs/arm64-v8a/
+            cp /tmp/libandroid-shmem.so android-build/libs/arm64-v8a/
+            cp /tmp/libtalloc.so android-build/libs/arm64-v8a/
             ls -la android-build/libs/arm64-v8a/
             cd android-build
             chmod +x gradlew

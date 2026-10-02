@@ -48,6 +48,16 @@ void PboxPaths::initialize()
     qInfo() << "PboxPaths:";
     qInfo() << "  files:" << QString::fromStdString(s_appFilesDir);
     qInfo() << "  libs:" << QString::fromStdString(s_nativeLibDir);
+
+    // 兜底：若 proot 仍依赖 libtalloc.so.2，创建符号链接（Android linker 不支持版本化 so）
+    QString libtalloc2 = QString::fromStdString(s_nativeLibDir) + "/libtalloc.so.2";
+    QString libtalloc  = QString::fromStdString(s_nativeLibDir) + "/libtalloc.so";
+    if (!QFile::exists(libtalloc2) && QFile::exists(libtalloc)) {
+        if (!QFile::link(libtalloc, libtalloc2))
+            qWarning() << "创建 libtalloc.so.2 链接失败";
+        else
+            qInfo() << "已创建 libtalloc.so.2 -> libtalloc.so";
+    }
 }
 
 std::string PboxPaths::appFilesDir() { return s_appFilesDir; }
