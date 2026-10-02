@@ -237,10 +237,10 @@ int main(int argc, char* argv[])
     QGuiApplication app(argc, argv);
     QGuiApplication::setApplicationName("Pbox");
     QGuiApplication::setOrganizationName("Pbox");
-    QGuiApplication::setApplicationVersion("1.0.1");
+    QGuiApplication::setApplicationVersion("1.0.2");
 
     qRegisterMetaType<InstalledContainer>();
-    qInfo() << "Pbox v1.0.1 启动, 架构:" << ContainerManager::instance().arch()
+    qInfo() << "Pbox v1.0.2 启动, 架构:" << ContainerManager::instance().arch()
             << ", ptrace:" << (ptraceOk ? "OK" : "DENIED");
     qInfo() << "appFilesDir:" << QString::fromStdString(PboxPaths::appFilesDir());
     qInfo() << "nativeLibDir:" << QString::fromStdString(PboxPaths::nativeLibDir());
@@ -248,6 +248,12 @@ int main(int argc, char* argv[])
             << " loader存在:" << QFile::exists(QString::fromStdString(PboxPaths::prootLoader()));
 
     QQmlApplicationEngine engine;
+
+    // 记录所有 QML 警告/错误到 qt.log（排查白屏闪退关键）
+    QObject::connect(&engine, &QQmlEngine::warnings, [](const QList<QQmlError>& warnings) {
+        for (const QQmlError& w : warnings)
+            qWarning() << "QML:" << w.toString();
+    });
 
     qmlRegisterUncreatableType<TerminalBridge>("Pbox", 1, 0, "TerminalBridge",
         "Use TerminalBridge.instance");

@@ -107,9 +107,14 @@ QVariantList ContainerManager::listInstalled()
             c.release = parts.mid(1).join("_");
         }
         c.sizeBytes = dirSize(entry.absoluteFilePath());
-        QVariant v;
-        v.setValue(c);
-        result.append(v);
+        // 用 QVariantMap 暴露给 QML，避免 Q_GADGET 属性访问兼容问题
+        QVariantMap m;
+        m["tag"] = c.tag;
+        m["os"] = c.os;
+        m["release"] = c.release;
+        m["rootfsPath"] = c.rootfsPath;
+        m["sizeBytes"] = c.sizeBytes;
+        result.append(m);
     }
     return result;
 }

@@ -279,17 +279,13 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 visible: logView.text.length > 0
-                Rectangle {
-                    width: parent.width
-                    color: "transparent"
-                    Label {
-                        id: logView
-                        text: ""
-                        color: subtext
-                        font.pixelSize: 11
-                        wrapMode: Label.Wrap
-                        width: parent.width
-                    }
+                contentItem: Label {
+                    id: logView
+                    text: ""
+                    color: subtext
+                    font.pixelSize: 11
+                    wrapMode: Label.Wrap
+                    width: installPage.width - 56
                 }
             }
 
@@ -380,11 +376,11 @@ ApplicationWindow {
     Dialog {
         id: aboutDialog
         title: "关于 Pbox"
+        modal: true
         standardButtons: Dialog.Ok
-        Modal { dim: true }
         contentItem: ColumnLayout {
             spacing: 10
-            Label { text: "Pbox v1.0.0"; font.bold: true; font.pixelSize: 16; color: text }
+            Label { text: "Pbox v1.0.2"; font.bold: true; font.pixelSize: 16; color: text }
             Label { text: "无 Root 的 proot 容器管理器"; color: subtext; wrapMode: Label.Wrap }
             Label { text: "架构: " + containerManager.arch; color: subtext; font.pixelSize: 12 }
             Label { text: "proot: " + containerManager.prootVersion; color: subtext; font.pixelSize: 12 }
@@ -398,10 +394,11 @@ ApplicationWindow {
         title: "确认"
         modal: true
         standardButtons: Dialog.Ok | Dialog.Cancel
+        property string message: "确定?"
         property var onAccept: function() {}
         onAccepted: onAccept()
         contentItem: Label {
-            text: "确定?"
+            text: confirmDialog.message
             color: text
             wrapMode: Label.Wrap
         }
