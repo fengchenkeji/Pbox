@@ -1,7 +1,4 @@
 // main.cpp - Pbox Android App 入口
-#ifndef _GNU_SOURCE
-#define _GNU_SOURCE   // bionic 的 backtrace 系列函数需要 __USE_GNU
-#endif
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
@@ -18,7 +15,8 @@
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
-#include <execinfo.h>
+#include <unwind.h>
+#include <dlfcn.h>
 #include <sys/wait.h>
 #include <sys/ptrace.h>
 #include <sys/types.h>
@@ -27,7 +25,31 @@
 #include "container_manager.h"
 
 // ===== 崩溃捕获：写入 files/logs/crash.log =====
+// 用 _Unwind_Backtrace（编译器内置），不依赖 bionic 的 execinfo.h（NDK r29 不再暴露 backtrace）
 static int g_crashFd = -1;
+
+struct CrashBtState {
+    void** current;
+    void** end;
+};
+
+static _Unwind_Reason_Code crashUnwind(struct _Unwind_Context* ctx, void* arg)
+{
+    CrashBtState* st = static_cast<CrashBtState*>(arg);
+    uintptr_t pc = _Unwind_GetIP(ctx);
+    if (pc != 0) {
+        if (st->current >= st->end) return _URC_END_OF_STACK;
+        *st->current++ = reinterpret_cast<void*>(pc);
+    }
+    return _URC_NO_REASON;
+}
+
+static int captureCrashBacktrace(void** buffer, int max)
+{
+    CrashBtState st = {buffer, buffer + max};
+    _Unwind_Backtrace(crashUnwind, &st);
+    return static_cast<int>(st.current - buffer);
+}
 
 static void crashHandler(int sig)
 {
@@ -37,8 +59,24 @@ static void crashHandler(int sig)
     if (g_crashFd >= 0) {
         write(g_crashFd, buf, n);
         void* bt[64];
-        int cnt = backtrace(bt, 64);
-        backtrace_symbols_fd(bt, cnt, g_crashFd);
+        int cnt = captureCrashBacktrace(bt, 64);
+        for (int i = 0; i < cnt; i++) {
+            char line[320];
+            Dl_info info;
+            if (dladdr(bt[i], &info) && info.dli_sname) {
+                snprintf(line, sizeof(line), "  #%02d %p %s+0x%lx (%s)\n",
+                         i, bt[i], info.dli_sname,
+                         (unsigned long)((char*)bt[i] - (char*)info.dli_saddr),
+                         info.dli_fname ? info.dli_fname : "?");
+            } else if (dladdr(bt[i], &info) && info.dli_fname) {
+                snprintf(line, sizeof(line), "  #%02d %p (%s+0x%lx)\n",
+                         i, bt[i], info.dli_fname,
+                         (unsigned long)((char*)bt[i] - (char*)info.dli_fbase));
+            } else {
+                snprintf(line, sizeof(line), "  #%02d %p\n", i, bt[i]);
+            }
+            write(g_crashFd, line, strlen(line));
+        }
         fsync(g_crashFd);
         close(g_crashFd);
     }
