@@ -1,0 +1,76 @@
+<?xml version="1.0"?>
+<!--
+/***************************************************************************
+** Pbox - AndroidManifest.xml
+** 适配 Android 8.0 (API 26) ~ Android 15/16 (API 35+)
+** Copyright (C) 2026 fengchenkeji
+** Distributed under the GPLv3 License.
+****************************************************************************/
+-->
+<manifest package="com.pbox.app"
+          android:versionCode="2"
+          android:versionName="1.0.0"
+          xmlns:android="http://schemas.android.com/apk/res/android"
+          xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- 网络 -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+
+    <!-- 存储（旧版兼容） -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+                     android:maxSdkVersion="29"/>
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+                     android:maxSdkVersion="32"/>
+
+    <!-- Android 11+ 访问 /sdcard -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+                     tools:ignore="ScopedStorage"/>
+
+    <!-- 前台服务 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+
+    <!-- Android 13+ 通知权限 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false"/>
+    <uses-feature android:name="android.hardware.faketouch" android:required="true"/>
+
+    <!-- Android 8.0 (26) ~ 最新 -->
+    <uses-sdk android:minSdkVersion="26"
+              android:targetSdkVersion="35"/>
+
+    <application android:label="Pbox"
+                 android:icon="@drawable/icon"
+                 android:roundIcon="@drawable/icon"
+                 android:allowBackup="true"
+                 android:usesCleartextTraffic="true"
+                 android:requestLegacyExternalStorage="true"
+                 android:hardwareAccelerated="true"
+                 android:extractNativeLibs="true"
+                 tools:targetApi="35">
+
+        <activity android:name="org.qtproject.qt.android.bindings.QtActivity"
+                  android:configChanges="orientation|uiMode|screenSize|screenLayout|smallestScreenSize|density|keyboard|keyboardHidden|navigation|locale|fontScale"
+                  android:launchMode="singleTop"
+                  android:exported="true"
+                  android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+            <meta-data android:name="android.app.lib_name" android:value="PboxAndroid"/>
+            <meta-data android:name="android.app.app_name" android:value="Pbox"/>
+        </activity>
+
+        <provider android:name="androidx.core.content.FileProvider"
+                  android:authorities="com.pbox.app.fileprovider"
+                  android:exported="false"
+                  android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS"
+                       android:resource="@xml/file_paths"/>
+        </provider>
+    </application>
+</manifest>

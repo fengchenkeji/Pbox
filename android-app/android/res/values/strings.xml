@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Pbox</string>
+    <string name="bar_title">Pbox 容器管理</string>
+</resources>
