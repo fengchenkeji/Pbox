@@ -3,6 +3,7 @@
 
 #include <QObject>
 #include <QNetworkAccessManager>
+#include <QNetworkReply>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QStringList>
@@ -11,7 +12,6 @@
 
 class QJSEngine;
 class QQmlEngine;
-class QNetworkReply;
 
 // 单例，注册为 QML 类型 Pbox.ContainerManager
 class ContainerManager : public QObject
