@@ -5,8 +5,8 @@
     android:versionName="1.1.0"
     android:versionCode="11">
 
-    <!-- Android 8.0 (API 26) 起支持，target 35 适配 Android 15 -->
-    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35"/>
+    <!-- Android 9.0 (API 28) 起支持（Qt 6.12 要求 minSdk>=28），target 35 适配 Android 15 -->
+    <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="35"/>
 
     <!-- 下载 rootfs / 下载 proot 需要网络 -->
     <uses-permission android:name="android.permission.INTERNET"/>

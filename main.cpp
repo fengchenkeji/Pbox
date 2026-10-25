@@ -27,7 +27,7 @@ int main(int argc, char *argv[])
     });
     prootPrep->start();
 
-    const QUrl url(u"qrc:/Pbox/Main.qml"_qs);
+    const QUrl url(QStringLiteral("qrc:/Pbox/Main.qml"));
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreated,
                      &app, [url](QObject *obj, const QUrl &objUrl) {
         if (!obj && url == objUrl)
