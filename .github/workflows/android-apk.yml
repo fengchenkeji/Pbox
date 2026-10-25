@@ -1,6 +1,6 @@
-# Pbox - Android APK 自动构建（Qt for Android + NDK）
-# 说明：Qt 官方未发布 6.12.0 的 Android 预编译包（aqt 源 android 最高 6.7.3），
-# 因此 CI 用 Qt 6.7.3 for Android 编译 APK；桌面开发/调试可用 Qt 6.12（CMake 下限 6.5）。
+# Pbox - Android APK 自动构建（Qt 6.12.0 for Android + NDK）
+# 说明：Qt 6.7+ 的 Android 预编译包位于官方 all_os 源，install-qt-action
+# 对 target=android 且 version>=6.7 会自动使用 host=all_os 并安装匹配的 host Qt。
 name: Build Android APK
 
 on:
@@ -11,9 +11,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      QT_VERSION: "6.7.3"
-      QT_DIR: "${{ github.workspace }}/qt"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -24,8 +21,8 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # GitHub runner 已预装 Android SDK + NDK + cmake，动态探测路径
-      - name: Prepare Android SDK/NDK (runner 预装)
+      # GitHub runner 已预装 Android SDK + NDK + cmake，动态探测
+      - name: Prepare Android NDK/CMake (runner 预装)
         run: |
           set -e
           ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
@@ -34,23 +31,20 @@ jobs:
           test -n "$NDK"
           echo "ANDROID_NDK_HOME=${NDK}" >> "$GITHUB_ENV"
           echo "使用 NDK: ${NDK}"
-          test -f "${NDK}/build/cmake/android.toolchain.cmake"
           CMAKE_BIN="$(ls "${ANDROID_HOME}"/cmake/*/bin/cmake 2>/dev/null | head -1)"
           test -n "$CMAKE_BIN"
           echo "ANDROID_CMAKE=${CMAKE_BIN}" >> "$GITHUB_ENV"
           echo "使用 cmake: ${CMAKE_BIN}"
 
-      # 用最新 aqtinstall 安装 Qt（host desktop + android_arm64_v8a）
-      - name: Install Qt (host + android)
-        run: |
-          pip install -q aqtinstall
-          mkdir -p "${{ env.QT_DIR }}"
-          # host Qt（androiddeployqt 需要）
-          aqt install-qt linux desktop ${{ env.QT_VERSION }} gcc_64 \
-              -m qtdeclarative -O "${{ env.QT_DIR }}"
-          # Qt for Android (arm64-v8a)
-          aqt install-qt linux android ${{ env.QT_VERSION }} android_arm64_v8a \
-              -m qtdeclarative -O "${{ env.QT_DIR }}"
+      # Qt 6.12.0 for Android（android_arm64_v8a），自动配 host Qt 到 QT_HOST_PATH
+      - name: Install Qt 6.12.0 for Android
+        id: install-qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.12.0'
+          target: 'android'
+          arch: 'android_arm64_v8a'
+          dir: '${{ github.workspace }}/qt'
 
       # 下载 proot 二进制（Termux 仓库），打进 APK assets
       - name: Download proot binary
@@ -75,14 +69,14 @@ jobs:
 
       - name: Configure (NDK cross-compile)
         run: |
-          QT_ANDROID="${{ env.QT_DIR }}/${{ env.QT_VERSION }}/android_arm64_v8a"
-          QT_HOST="${{ env.QT_DIR }}/${{ env.QT_VERSION }}/gcc_64"
+          echo "QT_ROOT_DIR=$QT_ROOT_DIR"
+          echo "QT_HOST_PATH=$QT_HOST_PATH"
           "${{ env.ANDROID_CMAKE }}" -S . -B build \
             -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM=android-26 \
-            -DCMAKE_PREFIX_PATH="$QT_ANDROID" \
-            -DQT_HOST_PATH="$QT_HOST" \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" \
+            -DQT_HOST_PATH="$QT_HOST_PATH" \
             -DCMAKE_BUILD_TYPE=Release
 
       - name: Build APK
