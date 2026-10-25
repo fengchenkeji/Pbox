@@ -51,13 +51,13 @@ jobs:
         run: |
           set -e
           mkdir -p android/assets
-          for VER in 5.4.0 5.3.0 5.2.0 5.1.1; do
-            URL="https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_${VER}_arm64.deb"
-            if curl -fsSL -o /tmp/proot.deb "$URL"; then
-              echo "Downloaded proot ${VER}"
-              break
-            fi
-          done
+          # 从 Termux 仓库动态解析最新 proot (aarch64) deb 版本
+          PROOT_VER="$(curl -s "https://packages.termux.dev/apt/termux-main/pool/main/p/proot/" \
+            | grep -oE 'proot_[0-9._]+_aarch64\.deb' | sort -V | tail -1)"
+          test -n "$PROOT_VER"
+          echo "下载 proot 包: $PROOT_VER"
+          URL="https://packages.termux.dev/apt/termux-main/pool/main/p/proot/${PROOT_VER}"
+          curl -fsSL -o /tmp/proot.deb "$URL"
           test -f /tmp/proot.deb
           rm -rf /tmp/prootx && mkdir -p /tmp/prootx
           dpkg-deb -x /tmp/proot.deb /tmp/prootx
