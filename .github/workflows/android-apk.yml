@@ -22,12 +22,22 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Android SDK & NDK
-        uses: android-actions/setup-android@v3
-        with:
-          api-level: '35'
-          ndk-version: '26.3.11579264'
-          cmake-version: '3.22.1'
+      # GitHub runner 已预装 Android SDK + NDK + cmake，动态探测路径
+      - name: Prepare Android SDK/NDK (runner 预装)
+        run: |
+          set -e
+          ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=${ANDROID_HOME}" >> "$GITHUB_ENV"
+          NDK="$(ls -d "${ANDROID_HOME}"/ndk/*/ 2>/dev/null | head -1 | sed 's#/$##')"
+          test -n "$NDK"
+          echo "ANDROID_NDK_HOME=${NDK}" >> "$GITHUB_ENV"
+          echo "使用 NDK: ${NDK}"
+          test -f "${NDK}/build/cmake/android.toolchain.cmake"
+          CMAKE_BIN="$(ls "${ANDROID_HOME}"/cmake/*/bin/cmake 2>/dev/null | head -1)"
+          test -n "$CMAKE_BIN"
+          echo "ANDROID_CMAKE=${CMAKE_BIN}" >> "$GITHUB_ENV"
+          echo "使用 cmake: ${CMAKE_BIN}"
+          ls "${ANDROID_HOME}"/platforms/android-* 2>/dev/null | sed 's#^#  #' | tail -3
 
       # 主机 Qt（供 androiddeployqt 使用）
       - name: Install host Qt
@@ -73,11 +83,10 @@ jobs:
 
       - name: Configure (NDK cross-compile)
         run: |
-          NDK="${ANDROID_NDK_HOME:-${ANDROID_NDK_LATEST_HOME}}"
           QT_ANDROID="${{ env.QT_DIR }}/${{ env.QT_VERSION }}/android_arm64_v8a"
           QT_HOST="${{ env.QT_DIR }}/${{ env.QT_VERSION }}/gcc_64"
-          cmake -S . -B build \
-            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+          "${{ env.ANDROID_CMAKE }}" -S . -B build \
+            -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM=android-26 \
             -DCMAKE_PREFIX_PATH="$QT_ANDROID" \
@@ -86,7 +95,7 @@ jobs:
 
       - name: Build APK
         run: |
-          cmake --build build --config Release
+          "${{ env.ANDROID_CMAKE }}" --build build --config Release
           echo "=== artifacts ==="
           find build -iname "*.apk" -o -iname "*.aab" 2>/dev/null | sed 's#^#  #'
 
