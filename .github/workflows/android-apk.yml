@@ -1,4 +1,6 @@
-# Pbox - Android APK 自动构建（Qt 6.12 + NDK）
+# Pbox - Android APK 自动构建（Qt for Android + NDK）
+# 说明：Qt 官方未发布 6.12.0 的 Android 预编译包（aqt 源 android 最高 6.7.3），
+# 因此 CI 用 Qt 6.7.3 for Android 编译 APK；桌面开发/调试可用 Qt 6.12（CMake 下限 6.5）。
 name: Build Android APK
 
 on:
@@ -10,7 +12,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      QT_VERSION: "6.12.0"
+      QT_VERSION: "6.7.3"
       QT_DIR: "${{ github.workspace }}/qt"
     steps:
       - name: Checkout
@@ -37,36 +39,26 @@ jobs:
           test -n "$CMAKE_BIN"
           echo "ANDROID_CMAKE=${CMAKE_BIN}" >> "$GITHUB_ENV"
           echo "使用 cmake: ${CMAKE_BIN}"
-          ls "${ANDROID_HOME}"/platforms/android-* 2>/dev/null | sed 's#^#  #' | tail -3
 
-      # 主机 Qt（供 androiddeployqt 使用）
-      - name: Install host Qt
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: ${{ env.QT_VERSION }}
-          host: linux
-          target: desktop
-          arch: gcc_64
-          dir: ${{ env.QT_DIR }}
-
-      # Android Qt (arm64-v8a)
-      - name: Install Qt for Android
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: ${{ env.QT_VERSION }}
-          host: linux
-          target: android
-          arch: android_arm64_v8a
-          dir: ${{ env.QT_DIR }}
+      # 用最新 aqtinstall 安装 Qt（host desktop + android_arm64_v8a）
+      - name: Install Qt (host + android)
+        run: |
+          pip install -q aqtinstall
+          mkdir -p "${{ env.QT_DIR }}"
+          # host Qt（androiddeployqt 需要）
+          aqt install-qt linux desktop ${{ env.QT_VERSION }} gcc_64 \
+              -m qtdeclarative -O "${{ env.QT_DIR }}"
+          # Qt for Android (arm64-v8a)
+          aqt install-qt linux android ${{ env.QT_VERSION }} android_arm64_v8a \
+              -m qtdeclarative -O "${{ env.QT_DIR }}"
 
       # 下载 proot 二进制（Termux 仓库），打进 APK assets
       - name: Download proot binary
         run: |
           set -e
           mkdir -p android/assets
-          ARCH_TERMUX="arm64"
           for VER in 5.4.0 5.3.0 5.2.0 5.1.1; do
-            URL="https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_${VER}_${ARCH_TERMUX}.deb"
+            URL="https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_${VER}_arm64.deb"
             if curl -fsSL -o /tmp/proot.deb "$URL"; then
               echo "Downloaded proot ${VER}"
               break

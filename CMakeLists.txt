@@ -5,8 +5,8 @@ project(Pbox VERSION 1.1.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# ============ 找 Qt6 (6.12) ============
-find_package(Qt6 6.12 REQUIRED COMPONENTS
+# ============ 找 Qt6（桌面 6.12 / Android 6.7.3 均满足下限 6.5） ============
+find_package(Qt6 6.5 REQUIRED COMPONENTS
     Core
     Gui
     Qml
@@ -16,7 +16,7 @@ find_package(Qt6 6.12 REQUIRED COMPONENTS
     Concurrent
 )
 
-qt_standard_project_setup(REQUIRES 6.12)
+qt_standard_project_setup(REQUIRES 6.5)
 
 # ============ 主程序 ============
 qt_add_executable(appPbox
