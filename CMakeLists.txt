@@ -47,6 +47,9 @@ target_link_libraries(appPbox
         Qt6::Concurrent
 )
 
+# 让根目录的 main.cpp 能找到 src/ 下的头文件
+target_include_directories(appPbox PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+
 # ============ Android 打包 source 目录（Manifest/res/assets 打进 APK） ============
 set_target_properties(appPbox PROPERTIES
     QT_ANDROID_PACKAGE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/android"
