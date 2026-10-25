@@ -1,0 +1,5 @@
+{
+    "cmake.options.statusBarVisibility": "visible",
+    "cmake.buildDirectory": "${workspaceFolder}/builds/${buildKit}/${buildType}",
+    "cmake.configureArgs": ["-DCMAKE_PREFIX_PATH=/opt/Qt/6.12.0/gcc_arm64/"]
+}
