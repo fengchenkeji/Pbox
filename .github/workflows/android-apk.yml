@@ -1,0 +1,100 @@
+# Pbox - Android APK 自动构建（Qt 6.12 + NDK）
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      QT_VERSION: "6.12.0"
+      QT_DIR: "${{ github.workspace }}/qt"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK & NDK
+        uses: android-actions/setup-android@v3
+        with:
+          api-level: '35'
+          ndk-version: '26.3.11579264'
+          cmake-version: '3.22.1'
+
+      # 主机 Qt（供 androiddeployqt 使用）
+      - name: Install host Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: linux
+          target: desktop
+          arch: gcc_64
+          dir: ${{ env.QT_DIR }}
+
+      # Android Qt (arm64-v8a)
+      - name: Install Qt for Android
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: linux
+          target: android
+          arch: android_arm64_v8a
+          dir: ${{ env.QT_DIR }}
+
+      # 下载 proot 二进制（Termux 仓库），打进 APK assets
+      - name: Download proot binary
+        run: |
+          set -e
+          mkdir -p android/assets
+          ARCH_TERMUX="arm64"
+          for VER in 5.4.0 5.3.0 5.2.0 5.1.1; do
+            URL="https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_${VER}_${ARCH_TERMUX}.deb"
+            if curl -fsSL -o /tmp/proot.deb "$URL"; then
+              echo "Downloaded proot ${VER}"
+              break
+            fi
+          done
+          test -f /tmp/proot.deb
+          rm -rf /tmp/prootx && mkdir -p /tmp/prootx
+          dpkg-deb -x /tmp/proot.deb /tmp/prootx
+          BIN=/tmp/prootx/data/data/com.termux/files/usr/bin/proot
+          test -f "$BIN"
+          cp "$BIN" android/assets/proot
+          chmod +x android/assets/proot
+          file android/assets/proot
+
+      - name: Configure (NDK cross-compile)
+        run: |
+          NDK="${ANDROID_NDK_HOME:-${ANDROID_NDK_LATEST_HOME}}"
+          QT_ANDROID="${{ env.QT_DIR }}/${{ env.QT_VERSION }}/android_arm64_v8a"
+          QT_HOST="${{ env.QT_DIR }}/${{ env.QT_VERSION }}/gcc_64"
+          cmake -S . -B build \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-26 \
+            -DCMAKE_PREFIX_PATH="$QT_ANDROID" \
+            -DQT_HOST_PATH="$QT_HOST" \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build APK
+        run: |
+          cmake --build build --config Release
+          echo "=== artifacts ==="
+          find build -iname "*.apk" -o -iname "*.aab" 2>/dev/null | sed 's#^#  #'
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pbox-APK
+          path: |
+            build/**/*.apk
+            build/**/*.aab
+          if-no-files-found: error
