@@ -52,9 +52,11 @@ set_target_properties(appPbox PROPERTIES
     QT_ANDROID_PACKAGE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/android"
 )
 
-# ============ 安装规则（桌面端用） ============
-include(GNUInstallDirs)
-install(TARGETS appPbox
-    BUNDLE DESTINATION .
-    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
-)
+# ============ 安装规则（桌面端用；Android 由 Qt android 宏自动打 APK，跳过） ============
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Android")
+    include(GNUInstallDirs)
+    install(TARGETS appPbox
+        BUNDLE DESTINATION .
+        RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+    )
+endif()
