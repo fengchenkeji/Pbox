@@ -12,7 +12,7 @@
 - **PTY 伪终端**：内置 fork/setsid 伪终端，支持交互式 shell，终端输出实时显示
 - **递归容器体积统计**：目录递归计算真实占用
 - **Material3 界面**：悬浮底部导航（容器/安装/终端/日志/设置）、选中高亮、明暗双主题
-- **Android 8 ~ 15+ 适配**：minSdk 26，targetSdk 35
+- **Android 9 ~ 15+ 适配**：minSdk 28（Qt6.12 要求），targetSdk 35，arm64-v8a
 
 ## 支持的发行版
 
@@ -38,7 +38,7 @@
 │   ├── terminal_bridge.cpp     # 终端会话桥接（proot 启动 + 降级）
 │   └── pbox_paths.cpp          # 路径管理
 ├── android/
-│   ├── AndroidManifest.xml     # 包名 com.pbox.app，minSdk 26 / targetSdk 35
+│   ├── AndroidManifest.xml     # 包名 com.pbox.app（SDK版本由Qt6 gradle控制, minSdk28）
 │   └── assets/                 # proot 二进制（CI 自动下载打进 APK）
 └── .github/workflows/
     └── android-apk.yml         # Qt6.12 + NDK 自动编译 APK
@@ -47,10 +47,10 @@
 ## 构建
 
 APK 由 GitHub Actions 自动构建（见 `.github/workflows/android-apk.yml`），流程：
-1. 安装 Android SDK/NDK、JDK 17
-2. 安装 Qt 6.12.0（host gcc_64 + android_arm64_v8a）
-3. 从 Termux 仓库下载 proot 二进制打进 `android/assets/proot`
-4. 用 NDK toolchain 交叉编译并 `androiddeployqt` 生成 APK
+1. 安装 JDK 17，探测 runner 预装 Android SDK/NDK
+2. 用 `jurplel/install-qt-action` 安装 **Qt 6.12.0 for Android**（`host=all_os` 源，自动配 host Qt 到 QT_ROOT_DIR/QT_HOST_PATH），并加装 `qttasktree` 模块
+3. 从 Termux 仓库动态解析下载最新 proot 二进制打进 `android/assets/proot`
+4. 用 NDK toolchain 交叉编译，`androiddeployqt` 打包出 APK（AGP 9）
 
 ### 本地构建（需 Qt 6.12 for Android + NDK 26+）
 ```bash
@@ -58,7 +58,8 @@ mkdir -p build && cd build
 cmake .. \
   -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
   -DANDROID_ABI=arm64-v8a \
-  -DANDROID_PLATFORM=android-26 \
+  -DANDROID_PLATFORM=android-28 \
+  -DANDROID_SDK_ROOT=$ANDROID_SDK_ROOT \
   -DCMAKE_PREFIX_PATH=$QT_ANDROID_DIR \
   -DQT_HOST_PATH=$QT_HOST_DIR
 cmake --build . --config Release
