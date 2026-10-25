@@ -47,7 +47,7 @@ jobs:
           version: '6.12.0'
           target: 'android'
           arch: 'android_arm64_v8a'
-          modules: 'qt-tasktree'
+          modules: 'qttasktree'
           dir: '${{ github.workspace }}/qt'
 
       # 下载 proot 二进制（Termux 仓库），打进 APK assets
