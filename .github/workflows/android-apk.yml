@@ -27,6 +27,9 @@ jobs:
           set -e
           ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           echo "ANDROID_HOME=${ANDROID_HOME}" >> "$GITHUB_ENV"
+          # Qt 6 Android 宏识别 ANDROID_SDK_ROOT，必须设置
+          echo "ANDROID_SDK_ROOT=${ANDROID_HOME}" >> "$GITHUB_ENV"
+          test -d "${ANDROID_HOME}/build-tools" && echo "build-tools: $(ls "${ANDROID_HOME}/build-tools" | tr '\n' ' ')" || echo "!! 无 build-tools"
           NDK="$(ls -d "${ANDROID_HOME}"/ndk/*/ 2>/dev/null | head -1 | sed 's#/$##')"
           test -n "$NDK"
           echo "ANDROID_NDK_HOME=${NDK}" >> "$GITHUB_ENV"
