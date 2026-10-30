@@ -73,6 +73,14 @@ cmake --build . --config Release
 cmake -S . -B build-desk && cmake --build build-desk && ./build-desk/appPbox
 ```
 
+### Linux（arm64/桌面）构建 — 先跑通桌面，再移植安卓
+```bash
+./build-linux.sh     # 自动检查 Qt/依赖库/CMake，编译出 build-linux-arm64/appPbox
+```
+- **Linux 平台 proot 策略**：优先用系统已安装的 proot（`QStandardPaths::findExecutable`），缺失时自动通过包管理器（apt/dnf/pacman/apk）安装；Android 才走 assets 内置/Termux 下载。
+- **arm64 目标机**：`python3 -m aqt install-qt linux desktop 6.12.0 linux_gcc_arm64 --outputdir ~/qt`，再跑 `./build-linux.sh`。
+- 代码层已按 `Q_OS_ANDROID` 宏区分平台分支，Linux 与 Android 共用同一套 Qt/QML 源码。
+
 ## 打包说明
 
 - proot 二进制来自 Termux 仓库（GPLv2 许可证），随 APK 打进 `assets/proot`
