@@ -9,6 +9,9 @@
 #include "container_manager.h"
 #include "terminal_bridge.h"
 
+// Qt 6.12 qt_add_qml_module 生成的默认资源前缀
+static const QUrl MAIN_QML_URL(QStringLiteral("qrc:/qt/qml/Pbox/Main.qml"));
+
 int main(int argc, char *argv[])
 {
     QGuiApplication app(argc, argv);
@@ -28,11 +31,11 @@ int main(int argc, char *argv[])
     // 【修复2】QML 加载成功后，再异步准备 proot（后台线程，不阻塞 UI）
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreated,
                      &app, [&](QObject *obj, const QUrl &objUrl) {
-        if (!obj && objUrl == QUrl(QStringLiteral("qrc:/Pbox/Main.qml"))) {
+        if (!obj && objUrl == MAIN_QML_URL) {
             QCoreApplication::exit(-1);           // QML 加载失败，保留原兜底
             return;
         }
-        if (obj && objUrl == QUrl(QStringLiteral("qrc:/Pbox/Main.qml"))) {
+        if (obj && objUrl == MAIN_QML_URL) {
             // QML 成功创建后再准备 proot，避免启动期阻塞
             QtConcurrent::run([]() {
                 ContainerManager::instance().ensureProot();
@@ -40,7 +43,7 @@ int main(int argc, char *argv[])
         }
     }, Qt::QueuedConnection);
 
-    engine.load(QUrl(QStringLiteral("qrc:/Pbox/Main.qml")));
+    engine.load(MAIN_QML_URL);
 
     return app.exec();
 }
