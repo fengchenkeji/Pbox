@@ -99,6 +99,35 @@ jobs:
           echo "=== artifacts ==="
           find build -iname "*.apk" -o -iname "*.aab" 2>/dev/null | sed 's#^#  #'
 
+      # 签名：从未签名 APK → zipalign → apksigner（v1+v2+v3）
+      - name: Sign APK (Release)
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.KEYSTORE_PASS }}
+          KS_ALIAS: ${{ secrets.KEYSTORE_ALIAS }}
+        run: |
+          set -e
+          BT="$(ls -d "${ANDROID_HOME}/build-tools/"*/ | sort -V | tail -1 | sed 's#/$##')"
+          echo "使用 build-tools: ${BT}"
+          APK="$(find build -iname "*.apk" | head -1)"
+          test -n "$APK" || { echo "!! 未找到 APK"; exit 1; }
+          # 还原 keystore
+          echo "$KEYSTORE_B64" | base64 -d > /tmp/pbox-release.jks
+          # zipalign（4字节对齐）
+          "${BT}/zipalign" -p -f 4 "$APK" /tmp/aligned.apk
+          # apksigner 签名（默认签 v1/v2/v3）
+          "${BT}/apksigner" sign \
+            --ks /tmp/pbox-release.jks \
+            --ks-pass "pass:${KS_PASS}" \
+            --key-pass "pass:${KS_PASS}" \
+            --ks-key-alias "${KS_ALIAS}" \
+            --out /tmp/pbox-signed.apk /tmp/aligned.apk
+          # 覆盖回原路径（保持后续 artifact 规则不变）
+          cp /tmp/pbox-signed.apk "$APK"
+          echo "=== 签名校验 ==="
+          "${BT}/apksigner" verify --verbose "$APK"
+          echo "=== 签名完成: $APK ==="
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
