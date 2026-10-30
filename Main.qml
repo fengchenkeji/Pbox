@@ -45,7 +45,6 @@ Window {
         Column {
             spacing: 16
             padding: 20
-            anchors.fill: parent
 
             Text {
                 text: "我的容器"
@@ -87,7 +86,7 @@ Window {
                 clip: true
                 spacing: 12
                 model: ContainerManager.listInstalled()
-                verticalScrollBar.visible: true
+                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded; visible: true }
 
                 delegate: Rectangle {
                     width: ListView.view.width
@@ -164,7 +163,6 @@ Window {
         Column {
             spacing: 14
             padding: 20
-            anchors.fill: parent
 
             Text {
                 text: "安装新容器"
@@ -207,12 +205,17 @@ Window {
                 width: parent.width
                 height: parent.height - 340
                 visible: installLog.length > 0
-                contentItem: Text {
-                    text: installLog
-                    color: onSurfaceV
-                    font.pixelSize: 11
-                    wrapMode: Text.Wrap
-                    width: win.width - 40
+                contentItem: Flickable {
+                    clip: true
+                    contentHeight: logTextItem.paintedHeight
+                    Text {
+                        id: logTextItem
+                        text: installLog
+                        color: onSurfaceV
+                        font.pixelSize: 11
+                        wrapMode: Text.Wrap
+                        width: win.width - 40
+                    }
                 }
             }
             Item { Layout.fillHeight: true }
@@ -247,7 +250,6 @@ Window {
         // ---------- 页面3：终端 ----------
         Column {
             spacing: 0
-            anchors.fill: parent
             Text {
                 text: "终端" + (activeContainer ? " · " + activeContainer : "")
                 font.pixelSize: 22
@@ -297,7 +299,6 @@ Window {
         Column {
             spacing: 12
             padding: 20
-            anchors.fill: parent
             Text {
                 text: "运行日志"
                 font.pixelSize: 22
@@ -331,7 +332,6 @@ Window {
         Column {
             spacing: 14
             padding: 20
-            anchors.fill: parent
             Text {
                 text: "应用设置"
                 font.pixelSize: 22
