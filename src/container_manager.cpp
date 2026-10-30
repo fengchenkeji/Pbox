@@ -368,12 +368,14 @@ QString ContainerManager::ensureProot()
     if (m_prootReady && QFileInfo::exists(PboxPaths::prootBin()))
         return PboxPaths::prootBin();
 
+#ifdef Q_OS_ANDROID
+    // ===== Android：从打包进 APK 的 assets 复制，失败则走 Termux 仓库 =====
     // 1. 尝试从打包进 APK 的 assets 复制（Android 主路径）
     if (installProotFromAssets()) {
         m_prootReady = true;
         return PboxPaths::prootBin();
     }
-    // 2. 尝试从 Termux 仓库网络下载（桌面调试/兜底）
+    // 2. 尝试从 Termux 仓库网络下载（Android 兜底）
     emit logMessage("未找到内置 proot，尝试从 Termux 仓库下载...");
     if (installProotFromNetwork()) {
         m_prootReady = true;
@@ -381,6 +383,26 @@ QString ContainerManager::ensureProot()
     }
     emit logMessage("proot 不可用，将降级为系统 shell 终端");
     return QString();
+#else
+    // ===== Linux/桌面：优先使用系统已安装的 proot =====
+    QString sysProot = QStandardPaths::findExecutable("proot");
+    if (!sysProot.isEmpty()) {
+        // 记录到私有目录，保证 prootBin()/prootCommand() 逻辑一致
+        m_prootReady = true;
+        return sysProot;
+    }
+    // 系统没有 proot：尝试从 Linux 发行版软件源安装（通过包管理器）
+    emit logMessage("未检测到系统 proot，尝试通过包管理器安装...");
+    if (installProotFromPackage()) {
+        QString sys = QStandardPaths::findExecutable("proot");
+        if (!sys.isEmpty()) {
+            m_prootReady = true;
+            return sys;
+        }
+    }
+    emit logMessage("proot 不可用，将降级为系统 shell 终端");
+    return QString();
+#endif
 }
 
 bool ContainerManager::installProotFromAssets()
@@ -464,19 +486,92 @@ bool ContainerManager::installProotFromNetwork()
     return false;
 }
 
+#ifndef Q_OS_ANDROID
+// Linux/桌面：通过系统包管理器安装 proot（需要用户在交互式会话里授权 sudo）
+bool ContainerManager::installProotFromPackage()
+{
+    // 已存在则无需安装
+    if (!QStandardPaths::findExecutable("proot").isEmpty())
+        return true;
+
+    // 识别发行版与包管理器
+    QString pkgManager;   // 包管理器
+    QStringList installArgs;
+    QString pkgName = "proot";
+
+    // 检测常见发行版
+    QFile osRel("/etc/os-release");
+    QString id;
+    if (osRel.open(QIODevice::ReadOnly)) {
+        QString txt = QString::fromUtf8(osRel.readAll());
+        QRegularExpression re("^ID=\"?([a-z]+)\"?", QRegularExpression::MultilineOption);
+        auto m = re.match(txt);
+        if (m.hasMatch()) id = m.captured(1);
+    }
+
+    if (id == "debian" || id == "ubuntu" || id.isEmpty()) {
+        // 尝试 apt（需要 sudo）
+        pkgManager = QStandardPaths::findExecutable("sudo").isEmpty() ? "apt-get" : "sudo apt-get";
+        installArgs = {"install", "-y", pkgName};
+    } else if (id == "fedora" || id == "centos" || id == "rhel") {
+        pkgManager = "sudo dnf";
+        installArgs = {"install", "-y", pkgName};
+    } else if (id == "arch") {
+        pkgManager = "sudo pacman";
+        installArgs = {"-S", "--noconfirm", pkgName};
+    } else if (id == "alpine") {
+        pkgManager = "sudo apk";
+        installArgs = {"add", pkgName};
+    } else {
+        emit logMessage(QString("暂不支持自动安装 proot（发行版 %1），请手动安装").arg(id));
+        return false;
+    }
+
+    emit logMessage(QString("正在通过 %1 安装 proot ...").arg(pkgManager));
+    QProcess pm;
+    pm.setProgram(pkgManager.split(' ').first());
+    pm.setArguments(pkgManager.split(' ').mid(1) + installArgs);
+    pm.setProcessChannelMode(QProcess::MergedChannels);
+    connect(&pm, &QProcess::readyReadStandardOutput, this, [&]() {
+        emit logMessage(QString::fromUtf8(pm.readAllStandardOutput()));
+    });
+    pm.start();
+    if (!pm.waitForFinished(180000)) {
+        pm.kill();
+        emit logMessage("proot 安装超时或失败");
+        return false;
+    }
+    return pm.exitStatus() == QProcess::NormalExit && pm.exitCode() == 0;
+}
+#endif
+
 QString ContainerManager::prootVersion()
 {
+#ifndef Q_OS_ANDROID
+    if (m_prootReady || !QStandardPaths::findExecutable("proot").isEmpty())
+        return "proot 已就绪";
+    return "未就绪（启动时自动获取或降级）";
+#else
     if (m_prootReady || QFileInfo::exists(PboxPaths::prootBin()))
         return "proot 已就绪";
     return "未就绪（启动时自动获取或降级）";
+#endif
 }
 
 // 生成 proot 启动命令
 QStringList ContainerManager::prootCommand(const QString& tag)
 {
+#ifndef Q_OS_ANDROID
+    // Linux/桌面：使用系统 proot（已在 PATH）
+    QString proot = QStandardPaths::findExecutable("proot");
+    if (proot.isEmpty())
+        proot = ensureProot();
+#else
+    // Android：使用复制到私有目录的 proot
     QString proot = PboxPaths::prootBin();
     if (!QFileInfo::exists(proot))
         proot = ensureProot();
+#endif
     if (proot.isEmpty() || !QFileInfo::exists(proot)) {
         emit logMessage("proot 不可用，无法隔离运行");
         return {};
