@@ -73,6 +73,9 @@ private:
     void fixRootfs(const QString& rootfsDir);
     bool installProotFromAssets();
     bool installProotFromNetwork();
+#ifndef Q_OS_ANDROID
+    bool installProotFromPackage();
+#endif
     static QStringList getMirrorUrls(const QString& os, const QString& release, const QString& arch);
 
     QNetworkAccessManager* m_nam = nullptr;
